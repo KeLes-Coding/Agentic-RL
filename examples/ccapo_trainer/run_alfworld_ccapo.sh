@@ -72,7 +72,7 @@ echo ">>> [2/2] Starting CCAPO Training with LoRA (2 GPUs)..."
 mkdir -p logger
 
 python3 -m verl.trainer.main_ppo \
-    algorithm.adv_estimator=gae \
+    algorithm.adv_estimator=grpo \
     reward_model.enable=False \
     reward_model.reward_manager=naive \
     actor_rollout_ref.rollout.load_format=safetensors \
@@ -104,15 +104,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.max_num_batched_tokens=32768 \
     actor_rollout_ref.rollout.max_model_len=32768 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
-    critic.optim.lr=1e-5 \
-    critic.model.path=$MODEL_PATH \
-    critic.model.enable_gradient_checkpointing=True \
-    critic.ppo_micro_batch_size_per_gpu=2 \
-    critic.model.fsdp_config.param_offload=False \
-    critic.model.fsdp_config.optimizer_offload=False \
-    critic.strategy=fsdp \
     algorithm.use_kl_in_reward=False \
     algorithm.gamma=1.0 \
     ++algorithm.ccapo.enable_ccapo=true \
@@ -123,7 +115,6 @@ python3 -m verl.trainer.main_ppo \
     env.seed=42 \
     env.max_steps=$MAX_STEPS \
     env.rollout.n=$GROUP_SIZE \
-    trainer.critic_warmup=0 \
     trainer.logger='[console,swanlab]' \
     trainer.project_name='verl_ccapo_debug' \
     trainer.experiment_name=$EXPERIMENT_NAME \
