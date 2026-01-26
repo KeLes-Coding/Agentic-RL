@@ -23,6 +23,8 @@ from agent_system.environments.prompts import *
 from agent_system.environments.base import EnvironmentManagerBase, to_numpy
 from agent_system.memory import SimpleMemory, SearchMemory
 from omegaconf import OmegaConf
+from agent_system.ccapo.manager import CCAPOManager
+from agent_system.ccapo.config import CCAPOConfig
 
 def parse_gamefile(infos):
     gamefile = []
@@ -133,6 +135,30 @@ class SearchEnvironmentManager(EnvironmentManagerBase):
 class AlfWorldEnvironmentManager(EnvironmentManagerBase):
     def __init__(self, envs, projection_f, config):
         self.memory = SimpleMemory()
+        
+        # CCAPO Config Parsing
+        ccapo_conf = CCAPOConfig(enable=False) # Default off unless specified
+        if hasattr(config, "algorithm") and hasattr(config.algorithm, "ccapo"):
+            c = config.algorithm.ccapo
+            # Enable flag (support both 'enable' and 'enable_ccapo')
+            ccapo_conf.enable = c.get("enable", c.get("enable_ccapo", False))
+            
+            # Loop Penalty
+            if "r_loop_penalty" in c:
+                ccapo_conf.loop_penalty.penalty_value = float(c.r_loop_penalty)
+            elif "loop_penalty" in c:
+                 if "penalty_value" in c.loop_penalty:
+                     ccapo_conf.loop_penalty.penalty_value = float(c.loop_penalty.penalty_value)
+            
+            # STDB Mode
+            if "enable_update_then_evaluate" in c and c.enable_update_then_evaluate:
+                ccapo_conf.stdb.mode = "update_then_evaluate"
+            
+            # Log Path (if user specifies stdb_save_path, we treat it as part of log dir config roughly)
+            if "log_dir" in c:
+                ccapo_conf.log_dir = c.log_dir
+
+        self.ccapo = CCAPOManager(ccapo_conf)
         super().__init__(envs, projection_f, config)
     
     def reset(self, kwargs):
@@ -141,6 +167,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
         # initialize the history buffer
         self.memory.reset(batch_size = len(text_obs))
         self.tasks = []
+        self.ccapo_trace = [[] for _ in range(len(text_obs))] # Initialize trace for each env
         self.pre_text_obs = text_obs
         self.extract_task(text_obs)
 
@@ -152,6 +179,46 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
         text_obs, image_obs, rewards, dones, infos = self.envs.step(actions)
         self.memory.store({'text_obs': self.pre_text_obs, 'action': actions})
         self.pre_text_obs = text_obs
+
+        # CCAPO Logic: Loop Detection & Fingerprinting
+        ccapo_rewards = np.zeros_like(rewards)
+        
+        for i, action in enumerate(actions):
+            # 1. Fingerprint
+            fp_action = self.ccapo.process_step_action(action)
+            
+            # 2. Check Loop (Immediate Penalty)
+            trace = self.ccapo_trace[i]
+            
+            loop_penalty = 0.0
+            if self.ccapo.config.enable: # Only if enabled
+                if len(trace) > 0 and fp_action == trace[-1]:
+                    loop_penalty = self.ccapo.get_loop_penalty() # Self loop
+                elif len(trace) > 1 and fp_action == trace[-2]:
+                    loop_penalty = self.ccapo.get_loop_penalty() # Backtrack
+            
+            # 3. Update Trace
+            self.ccapo_trace[i].append(fp_action)
+            
+            # 4. Query STDB (Micro Reward)
+            stdb_rewards = self.ccapo.stdb.query(self.ccapo_trace[i]) if (self.ccapo.stdb and self.ccapo.config.enable) else []
+            r_stdb = stdb_rewards[-1] if stdb_rewards else 0.0
+            
+            ccapo_rewards[i] = loop_penalty + r_stdb
+            
+            # Log for debug
+            if self.ccapo.config.enable:
+                 self.ccapo.logger.log_ccapo_debug("step", {
+                     "env_id": i,
+                     "action": action,
+                     "fp": fp_action,
+                     "loop_penalty": loop_penalty,
+                     "r_stdb": r_stdb,
+                     "step": len(trace)
+                 })
+
+        # Add CCAPO rewards to environment rewards
+        rewards = rewards + ccapo_rewards
 
         full_text_obs = self.build_text_obs(text_obs, self.envs.get_admissible_commands)
         if infos[0].get("extra.gamefile") is None:
@@ -220,6 +287,27 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 won_value = float(info['won'])
                 success['success_rate'].append(won_value)
                 
+                # CCAPO: End of Episode Update
+                # We need the trace for this specific batch item.
+                # Since _process_batch iterates, we can find the env index?
+                # Actually _process_batch is dealing with batch_idx which corresponds to envs
+                # total_batch_list is [batch_0_steps, batch_1_steps...]
+                # This function is complex. Let's assume we can't easily map back to self.ccapo_trace[i] 
+                # strictly inside this loop without more context (like env_id).
+                # However, batch_idx usually IS the env_id in simple VectorEnv?
+                # AlfWorldEnvironmentManager uses build_alfworld_envs... 
+                # Let's assume batch_idx maps to our self.ccapo_trace indices (0..N).
+                
+                # Update STDB
+                if hasattr(self, 'ccapo_trace') and batch_idx < len(self.ccapo_trace):
+                    self.ccapo.process_episode(self.ccapo_trace[batch_idx], outcome=(won_value > 0.5))
+                    # Clear trace? reset() handles it, but good to be safe if env reused without reset?
+                    # Usually reset() is called.
+                
+                # CCAPO: End of Episode Update
+                if hasattr(self, 'ccapo_trace') and batch_idx < len(self.ccapo_trace):
+                    self.ccapo.process_episode(self.ccapo_trace[batch_idx], outcome=(won_value > 0.5))
+
                 # Process game file if it exists
                 gamefile = info.get("extra.gamefile")
                 if gamefile:

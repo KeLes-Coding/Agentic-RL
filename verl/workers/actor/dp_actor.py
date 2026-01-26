@@ -38,6 +38,7 @@ from verl.utils.seqlen_balancing import get_reverse_idx, rearrange_micro_batches
 from verl.utils.torch_functional import logprobs_from_logits
 from verl.utils.ulysses import gather_outpus_and_unpad, ulysses_pad_and_slice_inputs, ulysses_pad
 from verl.workers.actor import BasePPOActor
+from agent_system.ccapo.manager import CCAPOManager
 
 if is_cuda_available:
     from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
@@ -72,6 +73,8 @@ class DataParallelPPOActor(BasePPOActor):
             else verl_F.entropy_from_logits
         )
         self.device_name = get_device_name()
+        
+        self.ccapo = CCAPOManager()
 
     def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -321,7 +324,7 @@ class DataParallelPPOActor(BasePPOActor):
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
         multi_turn = data.meta_info.get("multi_turn", False)
 
-        select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages"]
+        select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages", "reward_tensor"]
         if multi_turn:
             select_keys.append("loss_mask")
         if self.config.use_kl_loss:
@@ -395,6 +398,19 @@ class DataParallelPPOActor(BasePPOActor):
                     else:
                         raise ValueError(f"Unsupported loss_mode: {loss_mode}")
 
+                    # CCAPO LASR Weights
+                    sample_weights = None
+                    if self.ccapo.config.enable and self.ccapo.config.lasr.enable:
+                        # Extract outcomes and lengths
+                        # reward_tensor is (batch_size,)
+                        reward_tensor = data.get("reward_tensor", None)
+                        if reward_tensor is not None:
+                             # Assume outcome is success if reward > 0 (common in ALfWorld 0/1 rewards)
+                             # or check if it matches success_rate?
+                             outcomes = (reward_tensor > 0.5) 
+                             lengths = response_mask.sum(dim=-1)
+                             sample_weights = self.ccapo.compute_loss_weights(outcomes, lengths)
+
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
                         old_log_prob=old_log_prob,
                         log_prob=log_prob,
@@ -405,6 +421,7 @@ class DataParallelPPOActor(BasePPOActor):
                         cliprange_high=clip_ratio_high,
                         clip_ratio_c=clip_ratio_c,
                         loss_agg_mode=loss_agg_mode,
+                        sample_weights=sample_weights,
                     )
 
                     if entropy_coeff != 0:
