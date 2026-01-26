@@ -1024,7 +1024,9 @@ class RayPPOTrainer:
         )
 
         # [CCAPO] Initialize Global Trace Logger
-        self.trace_logger = GlobalTraceLogger(base_log_dir=self.config.algorithm.ccapo.log_dir if self.config.algorithm.get("ccapo", {}) else "logger")
+        ccapo_config = self.config.algorithm.get("ccapo", None)
+        log_dir = ccapo_config.get("log_dir", "logger") if ccapo_config else "logger"
+        self.trace_logger = GlobalTraceLogger(base_log_dir=log_dir)
 
         self.global_steps = 0
 

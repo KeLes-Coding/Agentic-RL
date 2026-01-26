@@ -36,7 +36,7 @@ export VLLM_ATTENTION_BACKEND=XFORMERS
 export SWANLAB_API_KEY="oB8w36PCJxKeqwif2ijWz"
 
 # 模型路径 (请确保路径存在)
-MODEL_PATH="/home/zzh/Workspace/modelscope/models/Qwen/Qwen2.5-0.5B-Instruct"
+MODEL_PATH="/home/zzh/Workspace/modelscope/models/Qwen/Qwen2.5-1.5B-Instruct"
 
 # 确保 PYTHONPATH 包含当前目录和 ALFWorld 环境包
 export PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/agent_system/environments/env_package/alfworld
