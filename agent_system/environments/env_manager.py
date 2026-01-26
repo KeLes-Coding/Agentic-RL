@@ -206,6 +206,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             
             ccapo_rewards[i] = loop_penalty + r_stdb
             
+
             # Log for debug
             if self.ccapo.config.enable:
                  self.ccapo.logger.log_ccapo_debug("step", {
@@ -216,6 +217,20 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                      "r_stdb": r_stdb,
                      "step": len(trace)
                  })
+            
+            # [NEW] Log Granular Env Step
+            self.ccapo.logger.log_env_step({
+                "env_id": i,
+                "step_idx": len(trace), # Current step index (1-based because appended?) No, trace attached before this log.
+                "action": action,
+                "reward_env": float(rewards[i]), # Original env reward
+                "reward_ccapo": float(ccapo_rewards[i]),
+                "total_reward": float(rewards[i] + ccapo_rewards[i]),
+                "done": bool(dones[i]),
+                "won": bool(infos[i].get("won", False)),
+                "pddl_valid": bool(infos[i].get("is_action_valid", False)),
+                "text_obs": text_obs[i]
+            })
 
         # Add CCAPO rewards to environment rewards
         rewards = rewards + ccapo_rewards

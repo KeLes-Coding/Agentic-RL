@@ -63,6 +63,7 @@ from verl.workers.rollout.async_server import AsyncLLMServerManager
 from gigpo import core_gigpo
 
 from agent_system.multi_turn_rollout import TrajectoryCollector, adjust_batch
+from agent_system.instrumentation.trace_logger import GlobalTraceLogger
 
 WorkerType = Type[Worker]
 
@@ -1022,6 +1023,9 @@ class RayPPOTrainer:
             config=OmegaConf.to_container(self.config, resolve=True),
         )
 
+        # [CCAPO] Initialize Global Trace Logger
+        self.trace_logger = GlobalTraceLogger(base_log_dir=self.config.algorithm.ccapo.log_dir if self.config.algorithm.get("ccapo", {}) else "logger")
+
         self.global_steps = 0
 
         # load checkpoint before doing anything
@@ -1123,6 +1127,31 @@ class RayPPOTrainer:
                     # Please take care when you implement group based adv computation such as GRPO and rloo
                     if self.config.trainer.balance_batch:
                         self._balance_batch(batch, metrics=metrics)
+                    
+                    # [CCAPO] Log Rollout Batch (Full Trajectory from Driver)
+                    try:
+                        # Extract data for logging
+                        log_inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=False)
+                        log_outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=False)
+                        # We use token_level_scores as a proxy for total reward if not aggregated yet? 
+                        # Actually 'step_rewards' or 'token_level_scores' exist.
+                        # Usually we want the final outcome. 
+                        # In GRPO, rewards are usually sparse or at end.
+                        
+                        log_items = []
+                        for i in range(len(log_inputs)):
+                            log_item = {
+                                "step": self.global_steps,
+                                "prompt": log_inputs[i],
+                                "response": log_outputs[i],
+                                "prompt_len": int(batch.batch["prompts"][i].shape[0]), # Attention mask might vary but this is raw shape
+                                "response_len": int(batch.batch["responses"][i].shape[0]),
+                                # "reward": ... (calculated later in timing_raw['reward'] block, maybe we should log there?)
+                            }
+                            log_items.append(log_item)
+                        self.trace_logger.log_rollout_batch(log_items)
+                    except Exception as e:
+                        print(f"[TraceLogger] Error logging rollout batch: {e}")
 
                     # compute global_valid tokens
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
@@ -1295,6 +1324,9 @@ class RayPPOTrainer:
 
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps)
+
+                # [CCAPO] Log Training Metrics
+                self.trace_logger.log_training_metrics(self.global_steps, metrics)
 
                 progress_bar.update(1)
                 self.global_steps += 1
