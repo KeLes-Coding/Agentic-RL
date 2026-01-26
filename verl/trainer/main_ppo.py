@@ -143,7 +143,7 @@ class TaskRunner:
             mapping[Role.RefPolicy] = global_pool_id
 
         reward_manager_name = config.reward_model.get("reward_manager", "episode")
-        if reward_manager_name == 'episode':
+        if reward_manager_name == 'episode' or reward_manager_name == 'naive':
             from agent_system.reward_manager import EpisodeRewardManager
             reward_manager_cls = EpisodeRewardManager
         else:
