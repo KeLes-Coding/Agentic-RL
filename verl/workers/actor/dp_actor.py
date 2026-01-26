@@ -324,7 +324,7 @@ class DataParallelPPOActor(BasePPOActor):
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
         multi_turn = data.meta_info.get("multi_turn", False)
 
-        select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages", "reward_tensor"]
+        select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages", "token_level_scores"]
         if multi_turn:
             select_keys.append("loss_mask")
         if self.config.use_kl_loss:
@@ -403,8 +403,11 @@ class DataParallelPPOActor(BasePPOActor):
                     if self.ccapo.config.enable and self.ccapo.config.lasr.enable:
                         # Extract outcomes and lengths
                         # reward_tensor is (batch_size,)
-                        reward_tensor = data.get("reward_tensor", None)
-                        if reward_tensor is not None:
+                        # reward_tensor = data.get("reward_tensor", None)
+                        token_level_scores = data.get("token_level_scores", None)
+                        if token_level_scores is not None:
+                             # Summarize token-level scores to get episode reward
+                             reward_tensor = token_level_scores.sum(dim=-1)
                              # Assume outcome is success if reward > 0 (common in ALfWorld 0/1 rewards)
                              # or check if it matches success_rate?
                              outcomes = (reward_tensor > 0.5) 
