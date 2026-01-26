@@ -42,12 +42,20 @@ class GlobalTraceLogger:
                 # If we are the driver (no parent process likely setting this yet), create one
                 run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Set environment variable so child processes (ray workers) can potentially pick it up?
-        # Note: Ray workers might process this differently. For now we assume config passes it or we re-gen.
-        # But ideally all parts of one run share a run_id.
         self.run_id = run_id
         
-        self.log_dir = os.path.join(base_log_dir, run_id)
+        # [FIX] Ensure absolute path to avoid Ray worker CWD issues
+        if not os.path.isabs(base_log_dir):
+            # Assuming we want to log relative to the PROJECT ROOT (where we run the script)
+            # We can use os.getcwd() from the driver, but workers might be elsewhere.
+            # Best bet: Use an environment variable for project root if available, or just use hard CWD from creation time.
+            # Since this class is instantiated on both driver and worker, we need a consistent root.
+            # For now, let's print the CWD to debug.
+            abs_base_dir = os.path.abspath(base_log_dir)
+        else:
+            abs_base_dir = base_log_dir
+
+        self.log_dir = os.path.join(abs_base_dir, run_id)
         os.makedirs(self.log_dir, exist_ok=True)
         
         self._files = {}
@@ -62,12 +70,16 @@ class GlobalTraceLogger:
                     json.dump({
                         "start_time": datetime.now().isoformat(),
                         "run_id": run_id,
-                        "pid": os.getpid()
+                        "pid": os.getpid(),
+                        "cwd": os.getcwd() 
                     }, f, indent=2)
             except OSError:
-                pass # Race condition, another process created it.
+                pass # Race condition
             
-        print(f"[GlobalTraceLogger] Initialized. Log Dir: {self.log_dir}, PID: {os.getpid()}")
+        print(f"\n[GlobalTraceLogger] >>> INITIALIZED <<<")
+        print(f"[GlobalTraceLogger] Log Dir: {self.log_dir}")
+        print(f"[GlobalTraceLogger] PID: {os.getpid()}")
+        print(f"[GlobalTraceLogger] CWD: {os.getcwd()}\n")
 
     def _get_file_handle(self, category: str, use_pid: bool = False):
         filename = f"{category}"
