@@ -22,6 +22,8 @@ def compute_lasr_weights(
         outcomes = torch.tensor(outcomes, dtype=torch.bool)
     if not isinstance(lengths, torch.Tensor):
         lengths = torch.tensor(lengths, dtype=torch.float32)
+    else:
+        lengths = lengths.float()
         
     device = lengths.device
     batch_size = len(outcomes)

@@ -92,3 +92,11 @@ class CCAPOManager:
         if self.config.enable and self.config.loop_penalty.enable:
             return self.config.loop_penalty.penalty_value
         return 0.0
+
+    def get_invalid_action_penalty(self) -> float:
+        """
+        Returns the penalty for invalid format or hallucinated actions.
+        """
+        if self.config.enable and self.config.invalid_action_penalty.enable:
+            return self.config.invalid_action_penalty.penalty_value
+        return 0.0

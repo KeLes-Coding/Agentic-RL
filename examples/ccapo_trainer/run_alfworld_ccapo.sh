@@ -111,6 +111,8 @@ python3 -m verl.trainer.main_ppo \
     ++algorithm.ccapo.r_loop_penalty=-0.5 \
     ++algorithm.ccapo.enable_update_then_evaluate=true \
     ++algorithm.ccapo.stdb_save_path="stdb/alfworld_stdb.json" \
+    ++algorithm.ccapo.invalid_action_penalty.enable=true \
+    ++algorithm.ccapo.invalid_action_penalty.penalty_value=-0.5 \
     env.env_name=alfworld/AlfredTWEnv \
     env.seed=42 \
     env.max_steps=$MAX_STEPS \
