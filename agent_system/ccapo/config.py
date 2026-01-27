@@ -26,6 +26,11 @@ class InvalidActionPenaltyConfig:
     penalty_value: float = -0.5
 
 @dataclass
+class ValidActionRewardConfig:
+    enable: bool = True
+    reward_value: float = 0.01
+
+@dataclass
 class CCAPOConfig:
     """
     Main Configuration for CCAPO v3.0.
@@ -36,6 +41,7 @@ class CCAPOConfig:
     lasr: LASRConfig = field(default_factory=LASRConfig)
     loop_penalty: LoopPenaltyConfig = field(default_factory=LoopPenaltyConfig)
     invalid_action_penalty: InvalidActionPenaltyConfig = field(default_factory=InvalidActionPenaltyConfig)
+    valid_action_reward: ValidActionRewardConfig = field(default_factory=ValidActionRewardConfig)
     
     # Path settings
     log_dir: str = "local_logger"

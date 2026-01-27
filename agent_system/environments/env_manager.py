@@ -158,6 +158,14 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 if "penalty_value" in ic:
                     ccapo_conf.invalid_action_penalty.penalty_value = float(ic.penalty_value)
             
+            # Valid Action Reward
+            if "valid_action_reward" in c:
+                vc = c.valid_action_reward
+                if "enable" in vc:
+                    ccapo_conf.valid_action_reward.enable = vc.enable
+                if "reward_value" in vc:
+                    ccapo_conf.valid_action_reward.reward_value = float(vc.reward_value)
+            
             # STDB Mode
             if "enable_update_then_evaluate" in c and c.enable_update_then_evaluate:
                 ccapo_conf.stdb.mode = "update_then_evaluate"
@@ -200,6 +208,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             
             loop_penalty = 0.0
             invalid_action_penalty = 0.0
+            valid_action_reward = 0.0
 
             if self.ccapo.config.enable: # Only if enabled
                 if len(trace) > 0 and fp_action == trace[-1]:
@@ -211,6 +220,9 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 # `valids[i]` comes from projection.py. 0=Invalid, 1=Valid.
                 if valids[i] == 0:
                     invalid_action_penalty = self.ccapo.get_invalid_action_penalty()
+                else:
+                    # Check Valid Action Reward (Shaping - NEW)
+                    valid_action_reward = self.ccapo.get_valid_action_reward()
 
             # 3. Update Trace
             self.ccapo_trace[i].append(fp_action)
@@ -219,7 +231,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             stdb_rewards = self.ccapo.stdb.query(self.ccapo_trace[i]) if (self.ccapo.stdb and self.ccapo.config.enable) else []
             r_stdb = stdb_rewards[-1] if stdb_rewards else 0.0
             
-            ccapo_rewards[i] = loop_penalty + invalid_action_penalty + r_stdb
+            ccapo_rewards[i] = loop_penalty + invalid_action_penalty + valid_action_reward + r_stdb
             
 
             # Log for debug

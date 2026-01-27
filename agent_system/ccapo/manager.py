@@ -100,3 +100,11 @@ class CCAPOManager:
         if self.config.enable and self.config.invalid_action_penalty.enable:
             return self.config.invalid_action_penalty.penalty_value
         return 0.0
+
+    def get_valid_action_reward(self) -> float:
+        """
+        Returns the small positive reward for valid format actions (shaping).
+        """
+        if self.config.enable and self.config.valid_action_reward.enable:
+            return self.config.valid_action_reward.reward_value
+        return 0.0
