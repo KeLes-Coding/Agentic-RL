@@ -135,6 +135,10 @@ class STDB:
 
     def save(self, path: str):
         import json
+        import os
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         
         # Convert defaultdict to regular dict for JSON serialization
         # graph structure: Dict[str, Dict[str, Dict]]
