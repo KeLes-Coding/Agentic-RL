@@ -49,7 +49,7 @@ def alfworld_projection(actions: List[str], action_pools: List[List[str]]):
         except:
             actions[i] = actions[i][-30:]
 
-            # check <think>...</think>
+        # check <think>...</think>
         think_start_idx = original_str.find("<think>")
         think_end_idx = original_str.find("</think>")
         if think_start_idx == -1 or think_end_idx == -1:
@@ -58,18 +58,5 @@ def alfworld_projection(actions: List[str], action_pools: List[List[str]]):
         # check if contains any Chinese characters
         if re.search(r'[\u4e00-\u9fff]', original_str):
             valids[i] = 0
-            
-        # [New] Validate against admissible actions (functional validity)
-        if valids[i] == 1 and action_pools and len(action_pools) > i:
-             # Admissible actions might not be lowercased in the pool
-             pool = set(a.lower() for a in action_pools[i])
-             
-             # Mimic simple cleaning: strip trailing punctuation
-             clean_act = extracted_action.strip(".,!")
-             if clean_act not in pool:
-                 valids[i] = 0
-             else:
-                 # Update to cleaned action if valid, to ensure execution works optimally
-                 actions[i] = clean_act
 
     return actions, valids

@@ -344,9 +344,6 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                     # Clear trace? reset() handles it, but good to be safe if env reused without reset?
                     # Usually reset() is called.
                 
-                # CCAPO: End of Episode Update
-                if hasattr(self, 'ccapo_trace') and batch_idx < len(self.ccapo_trace):
-                    self.ccapo.process_episode(self.ccapo_trace[batch_idx], outcome=(won_value > 0.5))
 
                 # Process game file if it exists
                 gamefile = info.get("extra.gamefile")
