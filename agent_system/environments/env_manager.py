@@ -338,11 +338,40 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 # AlfWorldEnvironmentManager uses build_alfworld_envs... 
                 # Let's assume batch_idx maps to our self.ccapo_trace indices (0..N).
                 
-                # Update STDB
+                # CCAPO: End of Episode Update
                 if hasattr(self, 'ccapo_trace') and batch_idx < len(self.ccapo_trace):
-                    self.ccapo.process_episode(self.ccapo_trace[batch_idx], outcome=(won_value > 0.5))
-                    # Clear trace? reset() handles it, but good to be safe if env reused without reset?
-                    # Usually reset() is called.
+                    
+                    # Extract Context from Gamefile
+                    gamefile = info.get("extra.gamefile", "") # e.g. /.../pick_and_place/trial_T20190906_190046_737380/game.tw-pddl
+                    
+                    task_type = "unknown_task"
+                    seed = "unknown_seed"
+                    
+                    if gamefile:
+                        # Parse standard ALFWorld path structure
+                        import os
+                        parts = gamefile.split('/')
+                        # Typical structure: .../json_2.1.1/train/pick_heat_then_place_in_recep/trial_T20190909_023730_768220/game.tw-pddl
+                        # We look for the folder that starts with 'trial_' and its parent.
+                        
+                        for k in range(len(parts)):
+                            if parts[k].startswith("trial_"):
+                                seed = parts[k] # trial_...
+                                if k > 0:
+                                    task_type = parts[k-1] # parent folder
+                                break
+                    
+                    context_keys = {
+                        "task_type": task_type,
+                        "seed": seed,
+                        "batch_id": str(batch_idx)
+                    }
+                
+                    self.ccapo.process_episode(
+                        self.ccapo_trace[batch_idx], 
+                        outcome=(won_value > 0.5),
+                        context_keys=context_keys
+                    )
                 
 
                 # Process game file if it exists

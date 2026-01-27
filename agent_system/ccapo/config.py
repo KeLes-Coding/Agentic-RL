@@ -10,6 +10,10 @@ class STDBConfig:
     weight_critical: float = 1.0 # C(E) importance
     weight_utility: float = 1.0  # U(E) importance
 
+    # Layering
+    layering_mode: str = "hierarchical" # "hierarchical" or "flat"
+    alpha: float = 0.5 # Weight for Local (Prompt-Level) vs Global (App-Level). Q = alpha*Q_local + (1-alpha)*Q_global
+
 @dataclass
 class LASRConfig:
     enable: bool = True

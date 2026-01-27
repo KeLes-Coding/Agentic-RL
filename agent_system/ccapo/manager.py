@@ -52,15 +52,19 @@ class CCAPOManager:
         
         return fingerprint_alfworld(action)
 
-    def process_episode(self, trace_actions: List[str], outcome: bool) -> List[float]:
+    def process_episode(self, trace_actions: List[str], outcome: bool, context_keys: Dict[str, str] = None) -> List[float]:
         """
         Process a completed episode.
         1. Updates STDB (if enabled).
         2. Queries STDB for micro-rewards (if enabled).
-        3. Logs details.
+        3. Logs details for debugging and trace replay.
+        
+        Args:
+            trace_actions: list of raw action strings
+            outcome: Success (True) or Fail (False)
+            context_keys: dictionary containing 'task_type' and 'seed' (for hierarchical STDB and logging)
         
         Returns: List of micro-rewards (one per step). 
-        If disabled, returns list of 0.0.
         """
         if not self.config.enable or not self.stdb:
             return [0.0] * len(trace_actions)
@@ -68,24 +72,56 @@ class CCAPOManager:
         # Fingerprint the whole trace
         fp_trace = [fingerprint_alfworld(a) for a in trace_actions]
         
-        # Update STDB
-        self.stdb.update(fp_trace, outcome)
+        # Update STDB with context
+        self.stdb.update(fp_trace, outcome, context=context_keys)
         
-        # Save STDB immediately after update (Simple persistence)
+        # Save STDB immediately (could be optimized)
         if self.config.stdb_save_path:
             self.stdb.save(self.config.stdb_save_path)
         
-        # Log Update
+        # --- Structured Logging ---
+        # Path: <log_dir>/<batch_id>/<task_type>/<seed>/trace.json
+        # We need batch_id (env_id or rollout_id). Assuming it might be in context_keys or just timestamp/uuid.
+        # If not provided, we use a simple timestamp or flat structure.
+        
+        if context_keys:
+            task_type = context_keys.get("task_type", "unknown_task")
+            seed = str(context_keys.get("seed", "unknown_seed"))
+            batch_id = str(context_keys.get("batch_id", "default_batch"))
+            
+            # Construct path inside the existing logger dir
+            # self.logger.log_dir is the base run dir (e.g. logger/20260127_...)
+            
+            import os
+            import json
+            import time
+            
+            struct_dir = os.path.join(self.logger.log_dir, "trajectories", batch_id, task_type, seed)
+            os.makedirs(struct_dir, exist_ok=True)
+            
+            # Save trace
+            trace_file = os.path.join(struct_dir, f"trace_{int(time.time()*1000)}.json")
+            with open(trace_file, 'w') as f:
+                json.dump({
+                    "trace_raw": trace_actions,
+                    "trace_fp": fp_trace,
+                    "outcome": outcome,
+                    "rewards_stdb": [], # Filled below
+                    "context": context_keys
+                }, f, indent=2)
+        
+        # Log Update to central log
         self.logger.log_ccapo_debug("stdb_update", {
-            "trace": fp_trace,
+            "trace_len": len(fp_trace),
             "outcome": outcome,
-            "total_success": self.stdb.total_success_episodes,
-            "total_fail": self.stdb.total_fail_episodes
+            "context": context_keys
         })
         
         # Query Rewards
         # "Update-then-Evaluate" -> We just updated. Now query.
-        rewards = self.stdb.query(fp_trace)
+        # Query Rewards
+        # "Update-then-Evaluate" -> We just updated. Now query.
+        rewards = self.stdb.query(fp_trace, context=context_keys)
         
         return rewards
 
