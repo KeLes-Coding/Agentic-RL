@@ -158,14 +158,6 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 if "penalty_value" in ic:
                     ccapo_conf.invalid_action_penalty.penalty_value = float(ic.penalty_value)
             
-            # Valid Action Reward
-            if "valid_action_reward" in c:
-                vc = c.valid_action_reward
-                if "enable" in vc:
-                    ccapo_conf.valid_action_reward.enable = vc.enable
-                if "reward_value" in vc:
-                    ccapo_conf.valid_action_reward.reward_value = float(vc.reward_value)
-            
             # STDB Mode
             if "enable_update_then_evaluate" in c and c.enable_update_then_evaluate:
                 ccapo_conf.stdb.mode = "update_then_evaluate"
@@ -173,6 +165,10 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             # Log Path (if user specifies stdb_save_path, we treat it as part of log dir config roughly)
             if "log_dir" in c:
                 ccapo_conf.log_dir = c.log_dir
+
+            # STDB Save Path
+            if "stdb_save_path" in c:
+                ccapo_conf.stdb_save_path = c.stdb_save_path
 
         self.ccapo = CCAPOManager(ccapo_conf)
         super().__init__(envs, projection_f, config)
@@ -220,9 +216,9 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 # `valids[i]` comes from projection.py. 0=Invalid, 1=Valid.
                 if valids[i] == 0:
                     invalid_action_penalty = self.ccapo.get_invalid_action_penalty()
-                else:
-                    # Check Valid Action Reward (Shaping - NEW)
-                    valid_action_reward = self.ccapo.get_valid_action_reward()
+                else: 
+                     # Give a small reward for being valid (format + func)
+                     valid_action_reward = 0.01
 
             # 3. Update Trace
             self.ccapo_trace[i].append(fp_action)

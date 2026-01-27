@@ -30,6 +30,9 @@ class CCAPOManager:
         
         if self.config.enable and self.config.stdb.enable:
             self.stdb = STDB(self.config.stdb)
+            # Try load if path exists
+            if self.config.stdb_save_path:
+                self.stdb.load(self.config.stdb_save_path)
         else:
             self.stdb = None
             
@@ -68,6 +71,10 @@ class CCAPOManager:
         # Update STDB
         self.stdb.update(fp_trace, outcome)
         
+        # Save STDB immediately after update (Simple persistence)
+        if self.config.stdb_save_path:
+            self.stdb.save(self.config.stdb_save_path)
+        
         # Log Update
         self.logger.log_ccapo_debug("stdb_update", {
             "trace": fp_trace,
@@ -99,12 +106,4 @@ class CCAPOManager:
         """
         if self.config.enable and self.config.invalid_action_penalty.enable:
             return self.config.invalid_action_penalty.penalty_value
-        return 0.0
-
-    def get_valid_action_reward(self) -> float:
-        """
-        Returns the small positive reward for valid format actions (shaping).
-        """
-        if self.config.enable and self.config.valid_action_reward.enable:
-            return self.config.valid_action_reward.reward_value
         return 0.0

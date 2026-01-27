@@ -61,25 +61,15 @@ def alfworld_projection(actions: List[str], action_pools: List[List[str]]):
             
         # [New] Validate against admissible actions (functional validity)
         if valids[i] == 1 and action_pools and len(action_pools) > i:
-             # Robust cleaning for matching
-             # Remove trailing punctuation (especially periods)
-             clean_extracted = extracted_action.strip(".,;:!")
-             
-             # Also strip common prefixes user might hallucinate inside the tag if tag extraction was messy
-             # though tag extraction logic usually handles this, sometimes "action: ..." remains if regex was used?
-             # Here we used simple substring, so "action: " is unlikely unless user wrote "<action>action: ...</action>"
-             if clean_extracted.startswith("action:"):
-                 clean_extracted = clean_extracted[7:].strip()
-                 
              # Admissible actions might not be lowercased in the pool
              pool = set(a.lower() for a in action_pools[i])
              
-             if clean_extracted in pool:
-                 # Update the action to the clean version so env receives it cleanly
-                 actions[i] = clean_extracted
-             else:
-                 # Try fuzzy match? Or just fail. 
-                 # For safety/strictness, if it's not exact match after cleaning, mark invalid.
+             # Mimic simple cleaning: strip trailing punctuation
+             clean_act = extracted_action.strip(".,!")
+             if clean_act not in pool:
                  valids[i] = 0
+             else:
+                 # Update to cleaned action if valid, to ensure execution works optimally
+                 actions[i] = clean_act
 
     return actions, valids

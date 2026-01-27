@@ -132,3 +132,47 @@ class STDB:
         score = I_E * w_s * (1.0 + w_c * C_E) * U_E
         
         return score
+
+    def save(self, path: str):
+        import json
+        
+        # Convert defaultdict to regular dict for JSON serialization
+        # graph structure: Dict[str, Dict[str, Dict]]
+        serializable_graph = {}
+        for u, neighbors in self.graph.items():
+            serializable_graph[u] = dict(neighbors)
+            
+        data = {
+            "total_success_episodes": self.total_success_episodes,
+            "total_fail_episodes": self.total_fail_episodes,
+            "graph": serializable_graph
+        }
+        
+        try:
+            with open(path, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"[STDB] Error saving to {path}: {e}")
+
+    def load(self, path: str):
+        import json
+        import os
+        
+        if not os.path.exists(path):
+            return
+
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+                
+            self.total_success_episodes = data.get("total_success_episodes", 0)
+            self.total_fail_episodes = data.get("total_fail_episodes", 0)
+            
+            # Reconstruct defaultdict structure
+            raw_graph = data.get("graph", {})
+            for u, neighbors in raw_graph.items():
+                for v, stats in neighbors.items():
+                    self.graph[u][v] = stats
+                    
+        except Exception as e:
+            print(f"[STDB] Error loading from {path}: {e}")
