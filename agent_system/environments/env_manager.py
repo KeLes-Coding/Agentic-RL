@@ -359,6 +359,10 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                                 seed = parts[k] # trial_...
                                 if k > 0:
                                     task_type = parts[k-1] # parent folder
+                                    # [Fix] Normalize task_type for Layer A sharing
+                                    # "pick_and_place_simple-Apple-..." -> "pick_and_place_simple"
+                                    if "-" in task_type:
+                                        task_type = task_type.split("-")[0]
                                 break
                     
                     context_keys = {

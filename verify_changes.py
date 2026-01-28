@@ -77,10 +77,10 @@ def test_ccapo_hierarchical():
     print("\n[SUCCESS] All checks passed.")
     
     # Cleanup
-    if os.path.exists("test_logger"):
-        shutil.rmtree("test_logger")
-    if os.path.exists("test_stdb"):
-        shutil.rmtree("test_stdb")
+    # if os.path.exists("test_logger"):
+    #     shutil.rmtree("test_logger")
+    # if os.path.exists("test_stdb"):
+    #     shutil.rmtree("test_stdb")
 
 if __name__ == "__main__":
     test_ccapo_hierarchical()
