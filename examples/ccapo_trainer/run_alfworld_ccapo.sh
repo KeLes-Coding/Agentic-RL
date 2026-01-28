@@ -47,9 +47,9 @@ export PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/agent_system/environments/env_packag
 DATA_SEED=42
 # TRAIN_RATIO=0.8 <-- 不再需要
 
-TRAIN_BATCH_SIZE=8
+TRAIN_BATCH_SIZE=4
 VAL_BATCH_SIZE=8
-GROUP_SIZE=4
+GROUP_SIZE=8
 EXPERIMENT_NAME="ccapo_alfworld_real_run1"
 MAX_STEPS=25
 
