@@ -84,6 +84,15 @@ class CCAPOManager:
         # We need batch_id (env_id or rollout_id). Assuming it might be in context_keys or just timestamp/uuid.
         # If not provided, we use a simple timestamp or flat structure.
         
+        # Query Rewards
+        # "Update-then-Evaluate" -> We just updated. Now query.
+        rewards = self.stdb.query(fp_trace, context=context_keys)
+        
+        # --- Structured Logging ---
+        # Path: <log_dir>/<batch_id>/<task_type>/<seed>/trace.json
+        # We need batch_id (env_id or rollout_id). Assuming it might be in context_keys or just timestamp/uuid.
+        # If not provided, we use a simple timestamp or flat structure.
+        
         if context_keys:
             task_type = context_keys.get("task_type", "unknown_task")
             seed = str(context_keys.get("seed", "unknown_seed"))
@@ -106,7 +115,7 @@ class CCAPOManager:
                     "trace_raw": trace_actions,
                     "trace_fp": fp_trace,
                     "outcome": outcome,
-                    "rewards_stdb": [], # Filled below
+                    "rewards_stdb": rewards, # Now populated
                     "context": context_keys
                 }, f, indent=2)
         
@@ -114,14 +123,9 @@ class CCAPOManager:
         self.logger.log_ccapo_debug("stdb_update", {
             "trace_len": len(fp_trace),
             "outcome": outcome,
-            "context": context_keys
+            "context": context_keys,
+            "mean_reward": sum(rewards)/len(rewards) if rewards else 0.0
         })
-        
-        # Query Rewards
-        # "Update-then-Evaluate" -> We just updated. Now query.
-        # Query Rewards
-        # "Update-then-Evaluate" -> We just updated. Now query.
-        rewards = self.stdb.query(fp_trace, context=context_keys)
         
         return rewards
 
