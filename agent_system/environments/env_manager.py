@@ -323,6 +323,17 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
         for i in reversed(range(len(total_batch_list[batch_idx]))):
             batch_item = total_batch_list[batch_idx][i]
             if batch_item['active_masks']:
+                # [Fix] Only process metrics and STDB if the episode is actually DONE.
+                # 'batch_item' comes from RolloutStorage, usually contains 'done' (tensor).
+                is_done = batch_item.get('done', False)
+                if hasattr(is_done, 'item'):
+                    is_done = is_done.item()
+                
+                if not is_done:
+                    # If not done, this batch fragment ended in the middle of an episode.
+                    # We should NOT record success/fail or update STDB yet.
+                    return 
+
                 info = total_infos[batch_idx][i]
                 won_value = float(info['won'])
                 success['success_rate'].append(won_value)
