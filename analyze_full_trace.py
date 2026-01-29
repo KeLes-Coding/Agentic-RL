@@ -65,19 +65,50 @@ class FullTraceAnalyzer:
         print(f"   FULL LIFECYCLE TRACE (Sample {num_samples} Eps)")
         print(f"{'='*60}")
         
-        # Use CCAPO events as the anchor, as they contain the rich Context
+    def analyze_lifecycle(self, num_samples=5):
+        """
+        Trace the lifecycle of a few episodes:
+        1. Context/Inputs (Seed, Task)
+        2. Execution (Env Steps, Actions)
+        3. CCAPO Processing (STDB Query/Update, Rewards)
+        4. Outcome (Rollout Return)
+        5. Training (Metric Step)
+        """
+        print(f"\n{'='*60}")
+        print(f"   FULL LIFECYCLE TRACE (Sample {num_samples} Eps)")
+        print(f"{'='*60}")
+        
+        # Use CCAPO events as the anchor
         ccapo_df = self.data.get("ccapo_events", pd.DataFrame())
+        
         if ccapo_df.empty:
             print("[ERR] No CCAPO debug events found. Cannot trace.")
             return
 
+        # Filter for STDB updates (Episode Ends)
+        if 'event' in ccapo_df.columns:
+            stdb_updates = ccapo_df[ccapo_df['event'] == 'stdb_update']
+        else:
+            print("[ERR] 'event' column missing in CCAPO logs.")
+            return
+
+        if stdb_updates.empty:
+            print("[WARN] No 'stdb_update' events found. This means no episodes finished (or were logged as finished).")
+            return
+
         # Sort by timestamp to get latest
-        if 'timestamp' in ccapo_df.columns:
-            ccapo_df = ccapo_df.sort_values("timestamp")
+        if 'timestamp' in stdb_updates.columns:
+            stdb_updates = stdb_updates.sort_values("timestamp")
             
         # Select samples (some success, some failure)
-        success_samples = ccapo_df[ccapo_df['outcome'] == True].tail(num_samples)
-        fail_samples = ccapo_df[ccapo_df['outcome'] == False].tail(num_samples)
+        # Check if 'outcome' column exists
+        if 'outcome' not in stdb_updates.columns:
+             print("[ERR] 'outcome' column missing in stdb_updates.")
+             print(f"Columns found: {stdb_updates.columns.tolist()}")
+             return
+
+        success_samples = stdb_updates[stdb_updates['outcome'] == True].tail(num_samples)
+        fail_samples = stdb_updates[stdb_updates['outcome'] == False].tail(num_samples)
         
         samples = pd.concat([success_samples, fail_samples])
         

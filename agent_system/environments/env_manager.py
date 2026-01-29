@@ -324,11 +324,11 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             batch_item = total_batch_list[batch_idx][i]
             if batch_item['active_masks']:
                 # [DEBUG] Print keys once to find 'done'
-                # print(f"DEBUG: batch_item keys: {batch_item.keys()}")
+                print(f"DEBUG: batch_item keys: {list(batch_item.keys())}")
                 
                 # [Fix] Only process metrics and STDB if the episode is actually DONE.
                 # 'batch_item' comes from RolloutStorage, usually contains 'done' (tensor).
-                is_done = batch_item.get('done', False)
+                is_done = batch_item.get('done', batch_item.get('dones', False))
                 if hasattr(is_done, 'item'):
                     is_done = is_done.item()
                 
