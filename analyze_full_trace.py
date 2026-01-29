@@ -174,18 +174,27 @@ class FullTraceAnalyzer:
             return
 
         ccapo_df = self.data["ccapo_events"]
-        n_ccapo = len(ccapo_df)
+        
+        # Filter for STDB updates only
+        if 'event' in ccapo_df.columns:
+            stdb_updates = ccapo_df[ccapo_df['event'] == 'stdb_update']
+        else:
+            stdb_updates = pd.DataFrame()
+            
+        n_ccapo = len(stdb_updates)
         n_traj = len(self.traj_files)
         
-        print(f"CCAPO Events:     {n_ccapo}")
-        print(f"Trajectory Files: {n_traj}")
+        print(f"CCAPO STDB Updates: {n_ccapo}")
+        print(f"Trajectory Files:   {n_traj}")
+        print(f"Total CCAPO Events: {len(ccapo_df)} (includes steps)")
         
         # Deep Dive
         # How many unique seeds in CCAPO logs?
         unique_seeds_log = set()
-        for ctx in ccapo_df['context']:
-            if isinstance(ctx, dict):
-                unique_seeds_log.add(ctx.get('seed'))
+        if not stdb_updates.empty and 'context' in stdb_updates.columns:
+            for ctx in stdb_updates['context']:
+                if isinstance(ctx, dict):
+                    unique_seeds_log.add(ctx.get('seed'))
                 
         print(f"Unique Seeds in Logs: {len(unique_seeds_log)}")
         
