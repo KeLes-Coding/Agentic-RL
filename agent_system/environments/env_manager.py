@@ -267,6 +267,8 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
         # add action_valid to infos
         for i, info in enumerate(infos):
             info['is_action_valid'] = to_numpy(valids[i])
+            # [Fix] Inject done status into info so _process_batch can see it
+            info['done'] = bool(dones[i])
 
         next_observations = {'text': full_text_obs, 'image': image_obs, 'anchor': text_obs}
         rewards = to_numpy(rewards)
@@ -323,16 +325,11 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
         for i in reversed(range(len(total_batch_list[batch_idx]))):
             batch_item = total_batch_list[batch_idx][i]
             if batch_item['active_masks']:
-                # [DEBUG] Print keys once to find 'done'
-                print(f"DEBUG: batch_item keys: {list(batch_item.keys())}")
-                
-                # [Fix] Only process metrics and STDB if the episode is actually DONE.
-                # 'batch_item' comes from RolloutStorage, usually contains 'done' (tensor).
-                is_done = batch_item.get('done', batch_item.get('dones', False))
-                if hasattr(is_done, 'item'):
-                    is_done = is_done.item()
-                
                 info = total_infos[batch_idx][i]
+                
+                # [Fix] Check done status from info (injected in step)
+                # We need to know if the episode is done to trigger CCAPO update.
+                is_done = info.get('done', False)
                 won_value = float(info['won'])
                 success['success_rate'].append(won_value)
                 
