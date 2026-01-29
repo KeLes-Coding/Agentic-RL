@@ -257,6 +257,43 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 "text_obs": text_obs[i]
             })
 
+            # [CCAPO] End of Episode Update (Moved from _process_batch to capture all episodes)
+            if dones[i] and self.ccapo.config.enable:
+                 won = bool(infos[i].get("won", False))
+                 
+                 # Extract Context
+                 # Prioritize info's gamefile, fallback to cached
+                 gamefile = infos[i].get("extra.gamefile", self.gamefile[i] if i < len(self.gamefile) else None)
+                 
+                 task_type = "unknown_task"
+                 seed = "unknown_seed"
+                 
+                 if gamefile:
+                    parts = gamefile.split('/')
+                    for k in range(len(parts)):
+                        if parts[k].startswith("trial_"):
+                            seed = parts[k]
+                            if k > 0:
+                                task_type = parts[k-1]
+                                if "-" in task_type:
+                                    task_type = task_type.split("-")[0]
+                            break
+                 
+                 context_keys = {
+                    "task_type": task_type,
+                    "seed": seed,
+                    "batch_id": str(i)
+                 }
+
+                 self.ccapo.process_episode(
+                    self.ccapo_trace[i],
+                    outcome=won,
+                    context_keys=context_keys
+                 )
+                 
+                 # Reset trace for next episode
+                 self.ccapo_trace[i] = []
+
         # Add CCAPO rewards to environment rewards
         rewards = rewards + ccapo_rewards
 
@@ -333,56 +370,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 won_value = float(info['won'])
                 success['success_rate'].append(won_value)
                 
-                # CCAPO: End of Episode Update
-                # We need the trace for this specific batch item.
-                # Since _process_batch iterates, we can find the env index?
-                # Actually _process_batch is dealing with batch_idx which corresponds to envs
-                # total_batch_list is [batch_0_steps, batch_1_steps...]
-                # This function is complex. Let's assume we can't easily map back to self.ccapo_trace[i] 
-                # strictly inside this loop without more context (like env_id).
-                # However, batch_idx usually IS the env_id in simple VectorEnv?
-                # AlfWorldEnvironmentManager uses build_alfworld_envs... 
-                # Let's assume batch_idx maps to our self.ccapo_trace indices (0..N).
-                
-                # CCAPO: End of Episode Update
-                # [Fix] Only update STDB if done.
-                if is_done and hasattr(self, 'ccapo_trace') and batch_idx < len(self.ccapo_trace):
-                    
-                    # Extract Context from Gamefile
-                    gamefile = info.get("extra.gamefile", "") # e.g. /.../pick_and_place/trial_T20190906_190046_737380/game.tw-pddl
-                    
-                    task_type = "unknown_task"
-                    seed = "unknown_seed"
-                    
-                    if gamefile:
-                        # Parse standard ALFWorld path structure
-                        import os
-                        parts = gamefile.split('/')
-                        # Typical structure: .../json_2.1.1/train/pick_heat_then_place_in_recep/trial_T20190909_023730_768220/game.tw-pddl
-                        # We look for the folder that starts with 'trial_' and its parent.
-                        
-                        for k in range(len(parts)):
-                            if parts[k].startswith("trial_"):
-                                seed = parts[k] # trial_...
-                                if k > 0:
-                                    task_type = parts[k-1] # parent folder
-                                    # [Fix] Normalize task_type for Layer A sharing
-                                    # "pick_and_place_simple-Apple-..." -> "pick_and_place_simple"
-                                    if "-" in task_type:
-                                        task_type = task_type.split("-")[0]
-                                break
-                    
-                    context_keys = {
-                        "task_type": task_type,
-                        "seed": seed,
-                        "batch_id": str(batch_idx)
-                    }
-                
-                    self.ccapo.process_episode(
-                        self.ccapo_trace[batch_idx], 
-                        outcome=(won_value > 0.5),
-                        context_keys=context_keys
-                    )
+                # CCAPO Update moved to step()
                 
 
                 # Process game file if it exists
