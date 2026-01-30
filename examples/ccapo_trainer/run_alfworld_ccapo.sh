@@ -116,6 +116,13 @@ python3 -m verl.trainer.main_ppo \
     ++algorithm.ccapo.stdb_save_path="stdb/alfworld_stdb.json" \
     ++algorithm.ccapo.invalid_action_penalty.enable=true \
     ++algorithm.ccapo.invalid_action_penalty.penalty_value=-0.5 \
+    ++algorithm.ccapo.stdb.c_explore=2.0 \
+    ++algorithm.ccapo.stdb.alpha_prior=1.0 \
+    ++algorithm.ccapo.stdb.beta_prior=1.0 \
+    ++algorithm.ccapo.stdb.enable_tanh_gating=true \
+    ++algorithm.ccapo.stdb.reward_scale=5.0 \
+    ++algorithm.ccapo.stdb.reward_temp=1.0 \
+    ++algorithm.ccapo.beta_micro=0.5 \
     env.env_name=alfworld/AlfredTWEnv \
     env.seed=42 \
     env.max_steps=$MAX_STEPS \
