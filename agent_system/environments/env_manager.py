@@ -25,6 +25,7 @@ from agent_system.memory import SimpleMemory, SearchMemory
 from omegaconf import OmegaConf
 from agent_system.ccapo.manager import CCAPOManager
 from agent_system.ccapo.config import CCAPOConfig
+from agent_system.ccapo.diagnostics import get_diagnostics
 
 def parse_gamefile(infos):
     gamefile = []
@@ -194,6 +195,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
 
             # CCAPO Logic: Loop Detection & Fingerprinting
         ccapo_rewards = np.zeros_like(rewards)
+        diagnostics = get_diagnostics(self.ccapo.config.log_dir) if self.ccapo.config.enable else None
         
         for i, action in enumerate(actions):
             # 1. Fingerprint
@@ -205,30 +207,60 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             loop_penalty = 0.0
             invalid_action_penalty = 0.0
             valid_action_reward = 0.0
+            is_loop = False
+            loop_type = None
 
-            if self.ccapo.config.enable: # Only if enabled
+            if self.ccapo.config.enable:
                 if len(trace) > 0 and fp_action == trace[-1]:
-                    loop_penalty = self.ccapo.get_loop_penalty() # Self loop
+                    loop_penalty = self.ccapo.get_loop_penalty()
+                    is_loop = True
+                    loop_type = "self_loop"
                 elif len(trace) > 1 and fp_action == trace[-2]:
-                    loop_penalty = self.ccapo.get_loop_penalty() # Backtrack
+                    loop_penalty = self.ccapo.get_loop_penalty()
+                    is_loop = True
+                    loop_type = "backtrack"
                 
-                # Check Invalid Action (NEW)
-                # `valids[i]` comes from projection.py. 0=Invalid, 1=Valid.
+                # Check Invalid Action
                 if valids[i] == 0:
                     invalid_action_penalty = self.ccapo.get_invalid_action_penalty()
                 else: 
-                     # Give a small reward for being valid (format + func)
-                     valid_action_reward = 0.01
+                    valid_action_reward = 0.01
 
             # 3. Update Trace
             self.ccapo_trace[i].append(fp_action)
             
-            # 4. Query STDB (Micro Reward)
-            stdb_rewards = self.ccapo.stdb.query(self.ccapo_trace[i]) if (self.ccapo.stdb and self.ccapo.config.enable) else []
-            r_stdb = stdb_rewards[-1] if stdb_rewards else 0.0
+            # 4. Query STDB (Micro Reward) - 修复：处理元组返回值
+            r_stdb = 0.0
+            if self.ccapo.stdb and self.ccapo.config.enable:
+                try:
+                    stdb_result = self.ccapo.stdb.query(self.ccapo_trace[i], log_diagnostics=False)
+                    if isinstance(stdb_result, tuple):
+                        stdb_rewards_list, _ = stdb_result
+                    else:
+                        stdb_rewards_list = stdb_result
+                    r_stdb = stdb_rewards_list[-1] if stdb_rewards_list else 0.0
+                except Exception as e:
+                    r_stdb = 0.0
             
             ccapo_rewards[i] = loop_penalty + invalid_action_penalty + valid_action_reward + r_stdb
             
+            # 记录步骤诊断
+            if diagnostics:
+                diagnostics.log_step_detail(
+                    env_id=i,
+                    step_idx=len(trace),
+                    action_raw=action,
+                    action_fp=fp_action,
+                    is_loop=is_loop,
+                    loop_type=loop_type,
+                    is_valid=bool(valids[i]),
+                    r_loop=loop_penalty,
+                    r_invalid=invalid_action_penalty,
+                    r_valid=valid_action_reward,
+                    r_stdb=r_stdb,
+                    r_total=ccapo_rewards[i],
+                    trace_so_far=self.ccapo_trace[i].copy()
+                )
 
             # Log for debug
             if self.ccapo.config.enable:
@@ -237,6 +269,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                      "action": action,
                      "fp": fp_action,
                      "loop_penalty": loop_penalty,
+                     "loop_type": loop_type,
                      "invalid_penalty": invalid_action_penalty,
                      "valid_flag": int(valids[i]),
                      "r_stdb": r_stdb,
@@ -257,19 +290,24 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 "text_obs": text_obs[i]
             })
 
-            # [CCAPO] End of Episode Update (Moved from _process_batch to capture all episodes)
+            # [CCAPO] End of Episode Update
             if dones[i] and self.ccapo.config.enable:
                  won = bool(infos[i].get("won", False))
                  
-                 # Extract Context
-                 # Prioritize info's gamefile, fallback to cached
+                 # Extract Context - 增强解析逻辑
                  gamefile = infos[i].get("extra.gamefile", self.gamefile[i] if i < len(self.gamefile) else None)
                  
                  task_type = "unknown_task"
                  seed = "unknown_seed"
+                 parse_success = False
                  
                  if gamefile:
-                    parts = gamefile.split('/')
+                    # 兼容 Windows 和 Linux 路径
+                    normalized_path = gamefile.replace('\\', '/')
+                    parts = normalized_path.split('/')
+                    
+                    # 尝试多种解析策略
+                    # 策略1: 查找 trial_ 前缀
                     for k in range(len(parts)):
                         if parts[k].startswith("trial_"):
                             seed = parts[k]
@@ -277,19 +315,52 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                                 task_type = parts[k-1]
                                 if "-" in task_type:
                                     task_type = task_type.split("-")[0]
+                            parse_success = True
                             break
+                    
+                    # 策略2: 如果没有 trial_，尝试其他模式
+                    if not parse_success:
+                        for k in range(len(parts)):
+                            # 查找类似 pick_and_place, look_at_obj 等任务类型
+                            for task_pattern in ["pick_and_place", "pick_two", "look_at_obj", "pick_heat", "pick_cool", "pick_clean"]:
+                                if task_pattern in parts[k]:
+                                    task_type = parts[k]
+                                    if k + 1 < len(parts):
+                                        seed = parts[k + 1]
+                                    parse_success = True
+                                    break
+                            if parse_success:
+                                break
+                 
+                 # 记录 Context 解析诊断
+                 if diagnostics:
+                     diagnostics.log_episode_context(
+                         env_id=i,
+                         gamefile_raw=gamefile or "",
+                         parsed_task_type=task_type,
+                         parsed_seed=seed,
+                         parse_success=parse_success,
+                         won=won
+                     )
                  
                  context_keys = {
                     "task_type": task_type,
                     "seed": seed,
-                    "batch_id": str(i)
+                    "batch_id": str(i),
+                    "gamefile": gamefile or ""
                  }
 
-                 self.ccapo.process_episode(
+                 # 使用 process_episode 返回值
+                 episode_result = self.ccapo.process_episode(
                     self.ccapo_trace[i],
                     outcome=won,
                     context_keys=context_keys
                  )
+                 
+                 # 可选：将 M_eff 和 correction 注入到 info 中供后续使用
+                 infos[i]['ccapo_m_eff'] = episode_result.get('m_eff', 1.0)
+                 infos[i]['ccapo_correction'] = episode_result.get('correction', 0.0)
+                 infos[i]['ccapo_loops_removed'] = len(episode_result.get('loops_removed', []))
                  
                  # Reset trace for next episode
                  self.ccapo_trace[i] = []

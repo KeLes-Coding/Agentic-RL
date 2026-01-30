@@ -44,3 +44,11 @@ class CCAPOConfig:
     # Path settings
     log_dir: str = "local_logger"
     stdb_save_path: Optional[str] = None
+    
+    # M_eff 效率调制参数
+    max_steps: int = 50  # Episode 最大步数
+    max_tokens: int = 10000  # Episode 最大 Token 数
+    
+    # 奖励组合参数
+    beta_micro: float = 0.1  # 微观奖励权重: R_total = (R_core * M_eff) + beta_micro * Sum(r_micro)
+

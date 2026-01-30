@@ -2,6 +2,7 @@ import math
 from collections import defaultdict
 from typing import List, Dict, Tuple, Optional
 from .config import STDBConfig
+from .diagnostics import get_diagnostics
 
 class STDB:
     """
@@ -91,12 +92,16 @@ class STDB:
             else:
                 edge["fail_cnt"] += 1.0
 
-    def query(self, trace: List[str], context: Dict[str, str] = None) -> List[float]:
+    def query(self, trace: List[str], context: Dict[str, str] = None, log_diagnostics: bool = True) -> Tuple[List[float], List[Dict]]:
         """
         Query the graph for micro-rewards using fused score.
         Q_final = alpha * Q_local + (1-alpha) * Q_global
+        
+        Returns:
+            Tuple of (rewards_list, edge_scores_details_list)
         """
-        rewards = [0.0] # First step 0
+        rewards = [0.0]  # First step 0
+        edge_details = []  # 诊断日志用
         
         task_type = context.get("task_type", "default_task") if context else "default_task"
         seed = context.get("seed", "default_seed") if context else "default_seed"
@@ -113,37 +118,53 @@ class STDB:
             u = trace[i]
             v = trace[i+1]
             
+            q_global = 0.0
+            q_local = 0.0
+            detail_global = {}
+            detail_local = {}
+            
             # Calculate Q_global
             if u in g_global and v in g_global[u]:
                 edge_g = g_global[u][v]
-                q_global = self._calculate_edge_score(edge_g, task_stats)
-            else:
-                q_global = 0.0
-                
+                q_global, detail_global = self._calculate_edge_score(edge_g, task_stats, u, v)
+            
             # Calculate Q_local
             if u in g_local and v in g_local[u]:
                 edge_l = g_local[u][v]
-                # For local, maybe use local stats? Or global stats?
-                # Usually local stats are too sparse. 
-                # Let's use the edge's own success rate purely?
-                # For consistency, we use the same formula but passed local edge stats.
-                # But "Total Success" for I(E) might naturally be task_stats too? 
-                # Or just local total success?
-                # Spec says: "alpha approaches 1 as N increases".
-                # Let's use task_stats for normalization to keep scale consistent.
-                q_local = self._calculate_edge_score(edge_l, task_stats) 
-            else:
-                q_local = 0.0
+                q_local, detail_local = self._calculate_edge_score(edge_l, task_stats, u, v)
             
             # Fuse
             q_final = alpha * q_local + (1.0 - alpha) * q_global
             rewards.append(q_final)
+            
+            # 记录边评分详情
+            edge_details.append({
+                "step": i + 1,
+                "u": u, "v": v,
+                "q_local": q_local,
+                "q_global": q_global,
+                "q_final": q_final,
+                "alpha": alpha,
+                "detail_local": detail_local,
+                "detail_global": detail_global
+            })
+        
+        # 记录诊断日志
+        if log_diagnostics and edge_details:
+            try:
+                diag = get_diagnostics()
+                diag.log_stdb_query(trace, edge_details, rewards, context or {})
+            except Exception as e:
+                pass  # 不因日志失败影响主流程
                 
-        return rewards
+        return rewards, edge_details
 
-    def _calculate_edge_score(self, edge: Dict, stats: Dict) -> float:
+    def _calculate_edge_score(self, edge: Dict, stats: Dict, u: str = None, v: str = None) -> Tuple[float, Dict]:
         """
         Calculate Q_STDB(E) = I(E) * (1 + lambda * C(E)) * U(E)
+        
+        Returns:
+            Tuple of (score, details_dict for diagnostics)
         """
         success_cnt = edge["success_cnt"]
         fail_cnt = edge["fail_cnt"]
@@ -166,19 +187,28 @@ class STDB:
         c_val = math.log((p_succ_given_e + 1e-6) / (p_succ_global + 1e-6))
         C_E = max(0.0, c_val)
         
-        # 3. Utility U(E)
-        # AvgGap... assuming 1.0 for now
+        # 3. Utility U(E) - 修复：使用实际 AvgGap 计算
         gap_avg = (edge["total_gap"] / edge["gap_samples"]) if edge["gap_samples"] > 0 else 1.0
-        # If we stick to gap=1 transitions, this is always 1.
-        U_E = 1.0 # Placeholder
+        # U(E) = 1 / (AvgGap)^alpha
+        w_u = self.config.weight_utility
+        U_E = 1.0 / (gap_avg ** w_u) if gap_avg > 0 else 1.0
         
         w_s = self.config.weight_success
         w_c = self.config.weight_critical
-        # w_u = self.config.weight_utility
         
         score = I_E * w_s * (1.0 + w_c * C_E) * U_E
         
-        return score
+        # 返回详细信息用于诊断日志
+        details = {
+            "u": u, "v": v,
+            "success_cnt": success_cnt, "fail_cnt": fail_cnt,
+            "I_E": I_E, "C_E": C_E, "U_E": U_E,
+            "gap_avg": gap_avg,
+            "p_succ_given_e": p_succ_given_e, "p_succ_global": p_succ_global,
+            "score": score
+        }
+        
+        return score, details
 
     def save(self, path: str):
         import json
