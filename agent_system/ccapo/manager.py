@@ -108,7 +108,8 @@ class CCAPOManager:
             
         self.config = config if config else CCAPOConfig()
         self.logger = GlobalTraceLogger(base_log_dir=self.config.log_dir)
-        self.diagnostics = get_diagnostics(self.config.log_dir)
+        # 使用 logger 的 run_id 确保诊断日志与主日志在同一目录
+        self.diagnostics = get_diagnostics(self.config.log_dir, run_id=self.logger.run_id)
         
         if self.config.enable and self.config.stdb.enable:
             self.stdb = STDB(self.config.stdb)
