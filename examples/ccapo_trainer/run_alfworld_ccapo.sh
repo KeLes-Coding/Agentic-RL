@@ -120,7 +120,7 @@ python3 -m verl.trainer.main_ppo \
     ++algorithm.ccapo.stdb.alpha_prior=1.0 \
     ++algorithm.ccapo.stdb.beta_prior=1.0 \
     ++algorithm.ccapo.stdb.enable_tanh_gating=true \
-    ++algorithm.ccapo.stdb.reward_scale=5.0 \
+    ++algorithm.ccapo.stdb.reward_scale=1.0 \
     ++algorithm.ccapo.stdb.reward_temp=1.0 \
     ++algorithm.ccapo.beta_micro=0.5 \
     env.env_name=alfworld/AlfredTWEnv \

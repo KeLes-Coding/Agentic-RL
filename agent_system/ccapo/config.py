@@ -21,7 +21,7 @@ class STDBConfig:
     
     # Reward Scaling
     enable_tanh_gating: bool = True
-    reward_scale: float = 5.0 # Max reward amplitude after tanh
+    reward_scale: float = 1.0 # Max reward amplitude after tanh
     reward_temp: float = 1.0  # Temperature for tanh scaling
 
 @dataclass
