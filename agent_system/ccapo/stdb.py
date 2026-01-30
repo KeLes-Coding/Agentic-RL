@@ -161,7 +161,10 @@ class STDB:
 
     def _calculate_edge_score(self, edge: Dict, stats: Dict, u: str = None, v: str = None) -> Tuple[float, Dict]:
         """
-        Calculate Q_STDB(E) = I(E) * (1 + lambda * C(E)) * U(E)
+        Calculate Q_STDB(E) with v3.1 enhancements:
+        - Bayesian Smoothing for P(Succ|E)
+        - Exploration Bonus
+        - Reward Scaling/Gating
         
         Returns:
             Tuple of (score, details_dict for diagnostics)
@@ -169,46 +172,78 @@ class STDB:
         success_cnt = edge["success_cnt"]
         fail_cnt = edge["fail_cnt"]
         
+        # v3.1: Bayesian Smoothing using Beta Priors
+        # Posterior Mean = (s + alpha) / (s + f + alpha + beta)
+        alpha_prior = self.config.alpha_prior if hasattr(self.config, 'alpha_prior') else 1.0
+        beta_prior = self.config.beta_prior if hasattr(self.config, 'beta_prior') else 1.0
+        
+        # Smoothed P(Succ|E)
+        p_succ_given_e = (success_cnt + alpha_prior) / (success_cnt + fail_cnt + alpha_prior + beta_prior)
+        
+        # Smoothed I(E): N(E)_success / Total_Success (still use raw counts for importance, or smoothed?)
+        # Let's keep I_E proportional to raw success count but use smoothed P for Criticality
         total_success_global = stats["total_success"] + 1e-6
+        I_E = success_cnt / total_success_global # Remains 0 for unseen edges, which is fine for "Importance"
+        # However, we want unseen edges to have non-zero score.
+        # Let's pivot: base probability P_smoothed is the main driver for new edges.
         
-        # 1. Importance I(E)
-        # N(E)_success / N_total_success (of this task type)
-        I_E = success_cnt / total_success_global
+        # 1. Base Score derived from Smoothed Probability
+        # Range: [0, 1]
+        base_score = p_succ_given_e
         
-        # 2. Criticality C(E)
-        # P(Succ|E) vs P(Succ|Global)
-        n_edge = success_cnt + fail_cnt + 1e-6
-        p_succ_given_e = success_cnt / n_edge
-        
+        # 2. Criticality C(E) - Relative Surprise
+        # C(E) = log( P(Succ|E) / P(Succ|Global) )
+        # Allows negative values!
         total_episodes = stats["total_success"] + stats["total_fail"] + 1e-6
-        p_succ_global = stats["total_success"] / total_episodes
+        p_succ_global = (stats["total_success"] + alpha_prior) / (total_episodes + alpha_prior + beta_prior)
         
-        # Info Gain
-        c_val = math.log((p_succ_given_e + 1e-6) / (p_succ_global + 1e-6))
-        C_E = max(0.0, c_val)
+        C_E = math.log(p_succ_given_e / p_succ_global)
         
-        # 3. Utility U(E) - 修复：使用实际 AvgGap 计算
+        # 3. Utility U(E) - Exploration Bonus (UCB-style)
+        # Bonus = c_explore / sqrt(N + 1)
+        w_exp = self.config.c_explore if hasattr(self.config, 'c_explore') else 1.0
+        n_visits = success_cnt + fail_cnt
+        bonus_exploration = w_exp / math.sqrt(n_visits + 1)
+        
+        # 4. Old Utility (Gap-based) - Optional, maybe reduce weight or fuse
+        # Default behavior: if high utility (low gap), boost score.
         gap_avg = (edge["total_gap"] / edge["gap_samples"]) if edge["gap_samples"] > 0 else 1.0
-        # U(E) = 1 / (AvgGap)^alpha
         w_u = self.config.weight_utility
-        U_E = 1.0 / (gap_avg ** w_u) if gap_avg > 0 else 1.0
+        U_E_gap = 1.0 / (gap_avg ** w_u) if gap_avg > 0 else 1.0
+        
+        # Combined Raw Score
+        # Strategy:
+        # Score = w_s * P_smoothed + w_c * C_E + Bonus
+        # Note: I_E (Importance) is removed from direct product because it kills 0-success edges.
+        # Instead, we rely on P_smoothed and Bonus.
         
         w_s = self.config.weight_success
         w_c = self.config.weight_critical
         
-        score = I_E * w_s * (1.0 + w_c * C_E) * U_E
+        # v3.1 Formula
+        raw_score = (w_s * base_score) + (w_c * C_E) + bonus_exploration
         
+        # 5. Reward Scaling / Tanh Gating
+        enable_gating = self.config.enable_tanh_gating if hasattr(self.config, 'enable_tanh_gating') else True
+        if enable_gating:
+            scale = self.config.reward_scale if hasattr(self.config, 'reward_scale') else 1.0
+            temp = self.config.reward_temp if hasattr(self.config, 'reward_temp') else 1.0
+            final_score = scale * math.tanh(raw_score / temp)
+        else:
+            final_score = raw_score
+            
         # 返回详细信息用于诊断日志
         details = {
             "u": u, "v": v,
             "success_cnt": success_cnt, "fail_cnt": fail_cnt,
-            "I_E": I_E, "C_E": C_E, "U_E": U_E,
-            "gap_avg": gap_avg,
-            "p_succ_given_e": p_succ_given_e, "p_succ_global": p_succ_global,
-            "score": score
+            "P_smoothed": p_succ_given_e,
+            "C_E_log": C_E,
+            "Bonus_exp": bonus_exploration,
+            "raw_score": raw_score,
+            "final_score": final_score
         }
         
-        return score, details
+        return final_score, details
 
     def save(self, path: str):
         import json

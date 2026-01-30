@@ -14,6 +14,16 @@ class STDBConfig:
     layering_mode: str = "hierarchical" # "hierarchical" or "flat"
     alpha: float = 0.5 # Weight for Local (Prompt-Level) vs Global (App-Level). Q = alpha*Q_local + (1-alpha)*Q_global
 
+    # v3.1 Improvements
+    alpha_prior: float = 1.0 # Beta distribution alpha (Success prior)
+    beta_prior: float = 1.0  # Beta distribution beta (Failure prior)
+    c_explore: float = 2.0   # Exploration constant for UCB-like bonus
+    
+    # Reward Scaling
+    enable_tanh_gating: bool = True
+    reward_scale: float = 5.0 # Max reward amplitude after tanh
+    reward_temp: float = 1.0  # Temperature for tanh scaling
+
 @dataclass
 class LASRConfig:
     enable: bool = True
@@ -50,5 +60,5 @@ class CCAPOConfig:
     max_tokens: int = 10000  # Episode 最大 Token 数
     
     # 奖励组合参数
-    beta_micro: float = 0.1  # 微观奖励权重: R_total = (R_core * M_eff) + beta_micro * Sum(r_micro)
+    beta_micro: float = 0.5  # 微观奖励权重: R_total = (R_core * M_eff) + beta_micro * Sum(r_micro)
 
