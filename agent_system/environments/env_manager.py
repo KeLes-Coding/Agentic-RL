@@ -170,6 +170,24 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             # STDB Save Path
             if "stdb_save_path" in c:
                 ccapo_conf.stdb_save_path = c.stdb_save_path
+            
+            # STDB Parameters (v3.1)
+            if "stdb" in c:
+                sc = c.stdb
+                if "c_explore" in sc: ccapo_conf.stdb.c_explore = float(sc.c_explore)
+                if "alpha_prior" in sc: ccapo_conf.stdb.alpha_prior = float(sc.alpha_prior)
+                if "beta_prior" in sc: ccapo_conf.stdb.beta_prior = float(sc.beta_prior)
+                if "reward_scale" in sc: ccapo_conf.stdb.reward_scale = float(sc.reward_scale)
+                if "reward_temp" in sc: ccapo_conf.stdb.reward_temp = float(sc.reward_temp)
+                if "enable_tanh_gating" in sc: ccapo_conf.stdb.enable_tanh_gating = bool(sc.enable_tanh_gating)
+                if "normalization_mode" in sc: ccapo_conf.stdb.normalization_mode = str(sc.normalization_mode)
+                if "z_score_beta" in sc: ccapo_conf.stdb.z_score_beta = float(sc.z_score_beta)
+                if "z_score_clip" in sc: ccapo_conf.stdb.z_score_clip = float(sc.z_score_clip)
+                if "seed_path" in sc: ccapo_conf.stdb.seed_path = str(sc.seed_path)
+                
+            # Global Micro Weight
+            if "beta_micro" in c:
+                ccapo_conf.beta_micro = float(c.beta_micro)
 
         self.ccapo = CCAPOManager(ccapo_conf)
         super().__init__(envs, projection_f, config)

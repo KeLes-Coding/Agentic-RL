@@ -35,6 +35,55 @@ class STDB:
         # Let's track per-task-type success/fail for I(E) calculation
         self.stats: Dict[str, Dict[str, float]] = defaultdict(lambda: {"total_success": 0.0, "total_fail": 0.0})
 
+        # Z-Score Normalization Stats (Global)
+        self.norm_stats = {
+            "mean": 0.0,
+            "var": 1.0,
+            "count": 0
+        }
+
+    def seed_from_json(self, json_path: str):
+        """
+        Seed the STDB with traces from a JSON file.
+        Format: List of {"trace": [actions...], "outcome": bool, "task_type": ..., "seed": ...}
+        """
+        import json
+        import os
+        
+        if not os.path.exists(json_path):
+            print(f"[STDB] Seed file not found: {json_path}")
+            return
+            
+        try:
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+                
+            count = 0
+            for item in data:
+                trace = item.get("trace", [])
+                outcome = item.get("outcome", False)
+                # Ensure context key mapping
+                context = {
+                    "task_type": item.get("task_type", "default_task"),
+                    "seed": str(item.get("seed", "default_seed"))
+                }
+                
+                # Fingerprint check? Assumed already fingerprinted or raw?
+                # Usually seeding data comes from our own traces, which are raw.
+                # Use fingerprint_alfworld if needed, but manager handles it.
+                # Here we assume the trace in JSON is ready-to-ingest (fingerprinted).
+                # If not, we might need to import fingerprint function.
+                # Looking at manager.py, trace is accumulated as PROCESSED (fingerprinted).
+                # So we assume JSON contains fingerprinted traces.
+                
+                self.update(trace, outcome, context)
+                count += 1
+                
+            print(f"[STDB] Seeded {count} traces from {json_path}")
+            
+        except Exception as e:
+            print(f"[STDB] Error seeding from {json_path}: {e}")
+
     def update(self, trace: List[str], outcome: bool, context: Dict[str, str] = None):
         """
         Update the graph with a new trajectory trace.
@@ -223,14 +272,49 @@ class STDB:
         # v3.1 Formula
         raw_score = (w_s * base_score) + (w_c * C_E) + bonus_exploration
         
-        # 5. Reward Scaling / Tanh Gating
-        enable_gating = self.config.enable_tanh_gating if hasattr(self.config, 'enable_tanh_gating') else True
-        if enable_gating:
+        # v3.1 Formula
+        raw_score = (w_s * base_score) + (w_c * C_E) + bonus_exploration
+        
+        # 5. Reward Scaling / Normalization
+        # v3.2 Z-Score Normalization
+        norm_mode = self.config.normalization_mode if hasattr(self.config, 'normalization_mode') else 'tanh'
+        
+        if norm_mode == 'z_score':
+            # Update stats (EMA)
+            # Only update if we have a valid score (sanity check)
+            if math.isfinite(raw_score):
+                beta = self.config.z_score_beta if hasattr(self.config, 'z_score_beta') else 0.01
+                
+                # EMA Update
+                delta = raw_score - self.norm_stats["mean"]
+                self.norm_stats["mean"] += beta * delta
+                self.norm_stats["var"] += beta * (delta**2 - self.norm_stats["var"])
+                self.norm_stats["count"] += 1
+            
+            # Calculate Z-Score
+            std = math.sqrt(self.norm_stats["var"] + 1e-6)
+            z = (raw_score - self.norm_stats["mean"]) / std
+            
+            # Clip
+            clip_val = self.config.z_score_clip if hasattr(self.config, 'z_score_clip') else 5.0
+            z_clipped = max(-clip_val, min(clip_val, z))
+            
+            # Tanh gating (optional but recommended after clip)
+            # Use reward_scale as amplitude
             scale = self.config.reward_scale if hasattr(self.config, 'reward_scale') else 1.0
             temp = self.config.reward_temp if hasattr(self.config, 'reward_temp') else 1.0
-            final_score = scale * math.tanh(raw_score / temp)
+            
+            final_score = scale * math.tanh(z_clipped / temp)
+            
         else:
-            final_score = raw_score
+            # Legacy Tanh Gating
+            enable_gating = self.config.enable_tanh_gating if hasattr(self.config, 'enable_tanh_gating') else True
+            if enable_gating:
+                scale = self.config.reward_scale if hasattr(self.config, 'reward_scale') else 1.0
+                temp = self.config.reward_temp if hasattr(self.config, 'reward_temp') else 1.0
+                final_score = scale * math.tanh(raw_score / temp)
+            else:
+                final_score = raw_score
             
         # 返回详细信息用于诊断日志
         details = {
@@ -260,6 +344,7 @@ class STDB:
         data = {
             "version": "3.0",
             "stats": dict(self.stats),
+            "norm_stats": self.norm_stats,
             "global_graph": recursive_dict(self.global_graph),
             "local_graph": recursive_dict(self.local_graph)
         }
@@ -285,6 +370,11 @@ class STDB:
             raw_stats = data.get("stats", {})
             for k, v in raw_stats.items():
                 self.stats[k] = v
+                
+            # Restore Norm Stats
+            raw_norm = data.get("norm_stats", {})
+            if raw_norm:
+                self.norm_stats.update(raw_norm)
                 
             # Restore Global Graph
             raw_global = data.get("global_graph", {})

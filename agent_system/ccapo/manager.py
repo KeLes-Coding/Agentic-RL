@@ -114,8 +114,17 @@ class CCAPOManager:
         if self.config.enable and self.config.stdb.enable:
             self.stdb = STDB(self.config.stdb)
             # Try load if path exists
+            loaded = False
             if self.config.stdb_save_path:
-                self.stdb.load(self.config.stdb_save_path)
+                # Check exist strictly before load to know if we succeeded (since load is silent)
+                if os.path.exists(self.config.stdb_save_path):
+                    self.stdb.load(self.config.stdb_save_path)
+                    loaded = True
+            
+            # Cold Start Seeding
+            # Only seed if we didn't load a checkpoint (to avoid double counting)
+            if not loaded and self.config.stdb.seed_path:
+                self.stdb.seed_from_json(self.config.stdb.seed_path)
         else:
             self.stdb = None
             

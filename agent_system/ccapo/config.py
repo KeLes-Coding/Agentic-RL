@@ -23,6 +23,14 @@ class STDBConfig:
     enable_tanh_gating: bool = True
     reward_scale: float = 1.0 # Max reward amplitude after tanh
     reward_temp: float = 1.0  # Temperature for tanh scaling
+    
+    # v3.2 Normalization (Z-Score)
+    normalization_mode: str = "z_score" # "tanh" or "z_score"
+    z_score_beta: float = 0.01 # Moving average update rate (1 - momentum)
+    z_score_clip: float = 5.0  # Clip range before tanh [-5, 5]
+    
+    # Cold Start Seeding
+    seed_path: Optional[str] = None # Path to expert traces json
 
 @dataclass
 class LASRConfig:
