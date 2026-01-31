@@ -92,6 +92,20 @@ class AlfworldEnvs(gym.Env):
             
         eval_dataset = env_kwargs.get('eval_dataset', 'eval_in_distribution')
         config = load_config_file(alf_config_path)
+
+        # [OVERRIDE] Use max_steps from Hydra config if provided
+        if 'max_steps' in env_kwargs and env_kwargs['max_steps'] is not None:
+             max_steps = int(env_kwargs['max_steps'])
+             print(f"[AlfworldEnvs] Overriding max_steps to {max_steps} from Hydra config")
+             
+             # Override RL training steps
+             if 'rl' in config and 'training' in config['rl']:
+                 config['rl']['training']['max_nb_steps_per_episode'] = max_steps
+             
+             # Override Dagger training steps
+             if 'dagger' in config and 'training' in config['dagger']:
+                 config['dagger']['training']['max_nb_steps_per_episode'] = max_steps
+
         env_type = config['env']['type']
         base_env = get_environment(env_type)(config, train_eval='train' if is_train else eval_dataset)
         self.multi_modal = (env_type == 'AlfredThorEnv')
