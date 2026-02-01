@@ -49,12 +49,12 @@ DATA_SEED=42
 
 TRAIN_BATCH_SIZE=4
 VAL_BATCH_SIZE=8
-GROUP_SIZE=8
+GROUP_SIZE=4
 EXPERIMENT_NAME="ccapo_alfworld_real_run1"
-MAX_STEPS=25
+MAX_STEPS=50
 
 # 新增：显式控制数据集大小
-TRAIN_SET_SIZE=320             # 例如：4个 batch
+TRAIN_SET_SIZE=128            # 例如：4个 batch
 VAL_SET_SIZE=$VAL_BATCH_SIZE  # 强制让验证集大小等于验证 Batch Size
 # ===========================================
 

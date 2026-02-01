@@ -148,44 +148,61 @@ class CCAPOManager:
         tokens_used: int = 0
     ) -> Dict[str, Any]:
         """
-        Process a completed episode with Update-then-Evaluate logic.
-        
-        Args:
-            trace_actions: list of raw action strings
-            outcome: Success (True) or Fail (False)
-            context_keys: dictionary containing 'task_type' and 'seed'
-            tokens_used: total tokens consumed in this episode
-        
-        Returns:
-            Dict containing processed rewards and modulation factors.
+        Process a completed episode.
+        Logic:
+        - Micro Reward (STDB): Added to each valid step.
+        - Macro Reward (Outcome): Added to the last step (Success/Fail).
+        - Loop Penalty: Replaces STDB reward for invalid steps.
         """
+        # 初始化 reward 向量，长度严格等于原始 trace
+        rewards_aligned = [0.0] * len(trace_actions)
+        
         result = {
-            "rewards": [0.0] * len(trace_actions),
+            "rewards": [],
             "edge_details": [],
             "m_eff": 1.0,
-            "m_eff_steps": 1.0,
-            "m_eff_tokens": 1.0,
             "correction": 0.0,
             "filtered_trace": trace_actions,
-            "loops_removed": [],
-            "pre_rewards": [],
-            "post_rewards": []
+            "loops_removed": []
         }
         
+        # 计算 M_eff (效率系数)
+        max_steps = self.config.max_steps if hasattr(self.config, 'max_steps') else 50
+        max_tokens = self.config.max_tokens if hasattr(self.config, 'max_tokens') else 10000
+        
+        m_eff_steps, m_eff_tokens, m_eff_final = compute_m_eff(
+            steps=len(trace_actions),
+            tokens=tokens_used,
+            max_steps=max_steps,
+            max_tokens=max_tokens
+        )
+        
+        # 1. 计算核心宏观奖励 (Macro Reward)
+        # 只有成功时应用 M_eff，失败时保持 -1.0
+        r_core = 1.0 if outcome else -1.0
+        weighted_core = r_core * m_eff_final if outcome else r_core
+        
+        # 记录 m_eff 供 Trainer 参考（虽然这里已经乘进去了）
+        result["m_eff"] = m_eff_final if outcome else 1.0
+        result["m_eff_steps"] = m_eff_steps
+        result["m_eff_tokens"] = m_eff_tokens
+
+        # 如果未启用 CCAPO，直接返回仅包含结果的奖励
         if not self.config.enable or not self.stdb:
+            rewards_aligned[-1] = weighted_core
+            result["rewards"] = rewards_aligned
             return result
         
         context = context_keys or {}
             
-        # 1. Fingerprint the whole trace
+        # 2. 轨迹指纹化与循环过滤
         fp_trace = [fingerprint_alfworld(a) for a in trace_actions]
-        
-        # 2. Filter loops
         filtered_trace, loops_removed = filter_loops(fp_trace)
+        
         result["filtered_trace"] = filtered_trace
         result["loops_removed"] = loops_removed
         
-        # 记录循环过滤诊断
+        # 诊断日志
         self.diagnostics.log_stdb_update(
             trace_raw=trace_actions,
             trace_fp=fp_trace,
@@ -195,21 +212,61 @@ class CCAPOManager:
             context=context
         )
         
-        # 3. Query STDB BEFORE update
+        # 3. STDB Update-then-Evaluate 流程
+        # Query Pre (仅用于记录 correction)
         pre_rewards, _ = self.stdb.query(filtered_trace, context=context, log_diagnostics=False)
-        result["pre_rewards"] = pre_rewards
         
-        # 4. Update STDB with FILTERED trace only
+        # Update
         self.stdb.update(filtered_trace, outcome, context=context)
-        
-        # Save STDB immediately
         if self.config.stdb_save_path:
             self.stdb.save(self.config.stdb_save_path)
-        
-        # 5. Query STDB AFTER update (Update-then-Evaluate)
+            
+        # Query Post (获取当前的边质量 R_micro)
         post_rewards, edge_details = self.stdb.query(filtered_trace, context=context, log_diagnostics=True)
-        result["post_rewards"] = post_rewards
         result["edge_details"] = edge_details
+        
+        # 4. 奖励对齐与合成 (Alignment & Composition)
+        # 目标：构建 R = R_micro + R_macro (Last Step)
+        
+        removed_indices = {item['index']: item for item in loops_removed}
+        filtered_idx_counter = 0
+        loop_pen = self.get_loop_penalty()
+        beta_micro = self.config.beta_micro  # STDB 权重的缩放系数
+        
+        for i in range(len(trace_actions)):
+            if i in removed_indices:
+                # [Case A] 循环/回溯步：给予惩罚，忽略 STDB 分数
+                rewards_aligned[i] = -abs(loop_pen)
+            else:
+                # [Case B] 有效步：填入 STDB 边质量分数
+                if filtered_idx_counter < len(post_rewards):
+                    # R_micro = beta * R_stdb
+                    rewards_aligned[i] = post_rewards[filtered_idx_counter] * beta_micro
+                    filtered_idx_counter += 1
+                else:
+                    rewards_aligned[i] = 0.0
+
+        # [Case C] 注入宏观结果 (Macro Injection)
+        # 在最后一步叠加结果奖励。注意：最后一步可能是循环（虽然少见），也可能是有效步。
+        # 无论如何，Outcome 必须加上去。
+        if len(rewards_aligned) > 0:
+            rewards_aligned[-1] += weighted_core
+            
+        result["rewards"] = rewards_aligned
+        
+        # 5. 记录统计信息
+        correction = sum(post_rewards) - sum(pre_rewards)
+        result["correction"] = correction
+        
+        self.diagnostics.log_reward_correction(
+            pre_rewards=pre_rewards,
+            post_rewards=post_rewards, # Log raw STDB output
+            correction=correction,
+            r_core=weighted_core,
+            m_eff=result["m_eff"],
+            final_reward=sum(rewards_aligned),
+            context=context
+        )
         
         # 6. Compute M_eff
         max_steps = self.config.max_steps if hasattr(self.config, 'max_steps') else 50

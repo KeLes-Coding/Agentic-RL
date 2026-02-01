@@ -19,6 +19,8 @@ import torch
 import numpy as np
 from functools import partial
 import os
+import json
+import time
 from agent_system.environments.prompts import *
 from agent_system.environments.base import EnvironmentManagerBase, to_numpy
 from agent_system.memory import SimpleMemory, SearchMemory
@@ -220,53 +222,79 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             fp_action = self.ccapo.process_step_action(action)
             
             # 2. Check Loop (Immediate Penalty)
+            # 2. Check Loop & Stats Setup
             trace = self.ccapo_trace[i]
             
             loop_penalty = 0.0
             invalid_action_penalty = 0.0
             valid_action_reward = 0.0
+            r_stdb = 0.0
             is_loop = False
             loop_type = None
-
+            
             if self.ccapo.config.enable:
-                if len(trace) > 0 and fp_action == trace[-1]:
-                    loop_penalty = self.ccapo.get_loop_penalty()
-                    is_loop = True
-                    loop_type = "self_loop"
-                elif len(trace) > 1 and fp_action == trace[-2]:
-                    loop_penalty = self.ccapo.get_loop_penalty()
-                    is_loop = True
-                    loop_type = "backtrack"
-                
-                # Check Invalid Action
-                if valids[i] == 0:
-                    invalid_action_penalty = self.ccapo.get_invalid_action_penalty()
-                else: 
+                # [FIX]: Only process STDB/Loop logic if action is VALID
+                if valids[i] == 1:
+                    # Valid Action Path
                     valid_action_reward = 0.01
+                    
+                    # Logic 1: Loop Check on existing trace
+                    if len(trace) > 0 and fp_action == trace[-1]:
+                        loop_penalty = self.ccapo.get_loop_penalty()
+                        is_loop = True
+                        loop_type = "self_loop"
+                    elif len(trace) > 1 and fp_action == trace[-2]:
+                        loop_penalty = self.ccapo.get_loop_penalty()
+                        is_loop = True
+                        loop_type = "backtrack"
+                    
+                    # Logic 2: Update Trace (Only if valid)
+                    self.ccapo_trace[i].append(fp_action)
+                    
+                    # Logic 3: Query STDB (Only if valid)
+                    if self.ccapo.stdb:
+                        try:
+                            # Use the updated trace which includes current action
+                            stdb_result = self.ccapo.stdb.query(self.ccapo_trace[i], log_diagnostics=False)
+                            if isinstance(stdb_result, tuple):
+                                stdb_rewards_list, _ = stdb_result
+                            else:
+                                stdb_rewards_list = stdb_result
+                            r_stdb = stdb_rewards_list[-1] if stdb_rewards_list else 0.0
+                        except Exception as e:
+                            r_stdb = 0.0
+                            
+                else:
+                    # Invalid Action Path: 
+                    # - No Trace Update (Invisible to STDB)
+                    # - No STDB Reward
+                    # - Only Penalty
+                    invalid_action_penalty = self.ccapo.get_invalid_action_penalty()
 
-            # 3. Update Trace
-            self.ccapo_trace[i].append(fp_action)
-            
-            # 4. Query STDB (Micro Reward) - 修复：处理元组返回值
-            r_stdb = 0.0
-            if self.ccapo.stdb and self.ccapo.config.enable:
-                try:
-                    stdb_result = self.ccapo.stdb.query(self.ccapo_trace[i], log_diagnostics=False)
-                    if isinstance(stdb_result, tuple):
-                        stdb_rewards_list, _ = stdb_result
-                    else:
-                        stdb_rewards_list = stdb_result
-                    r_stdb = stdb_rewards_list[-1] if stdb_rewards_list else 0.0
-                except Exception as e:
-                    r_stdb = 0.0
-            
             ccapo_rewards[i] = loop_penalty + invalid_action_penalty + valid_action_reward + r_stdb
+            
+            # [NEW] Detailed Reward Logging Accumulation
+            # We need to reconstruct the full sequence of rewards for this episode
+            if not hasattr(self, 'reward_history'):
+                 self.reward_history = [[] for _ in range(len(actions))]
+            
+            self.reward_history[i].append({
+                "step": len(self.reward_history[i]) + 1,
+                "action": action,
+                "fp": fp_action,
+                "valid": bool(valids[i]),
+                "r_loop": loop_penalty,
+                "r_invalid": invalid_action_penalty,
+                "r_valid": valid_action_reward,
+                "r_stdb": r_stdb,
+                "r_total": ccapo_rewards[i]
+            })
             
             # 记录步骤诊断
             if diagnostics:
                 diagnostics.log_step_detail(
                     env_id=i,
-                    step_idx=len(trace),
+                    step_idx=len(self.reward_history[i]), # Use history len as accurate step count
                     action_raw=action,
                     action_fp=fp_action,
                     is_loop=is_loop,
@@ -291,13 +319,13 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                      "invalid_penalty": invalid_action_penalty,
                      "valid_flag": int(valids[i]),
                      "r_stdb": r_stdb,
-                     "step": len(trace)
+                     "step": len(self.reward_history[i])
                  })
             
             # [NEW] Log Granular Env Step
             self.ccapo.logger.log_env_step({
                 "env_id": i,
-                "step_idx": len(trace), # Current step index (1-based because appended?) No, trace attached before this log.
+                "step_idx": len(self.reward_history[i]),
                 "action": action,
                 "reward_env": float(rewards[i]), # Original env reward
                 "reward_ccapo": float(ccapo_rewards[i]),
@@ -393,6 +421,31 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                  infos[i]['ccapo_correction'] = episode_result.get('correction', 0.0)
                  infos[i]['ccapo_loops_removed'] = len(episode_result.get('loops_removed', []))
                  
+                 # [NEW] Log Detailed Rewards History
+                 if hasattr(self, 'reward_history') and len(self.reward_history) > i:
+                     try:
+                         detailed_log_path = os.path.join(self.ccapo.config.log_dir, "detailed_rewards.jsonl")
+                         # Basic check to avoid excessive file open/close matching checks, 
+                         # usually log_dir exists by now.
+                         
+                         log_entry = {
+                             "timestamp": time.time(),
+                             "env_id": i,
+                             "task_type": context_keys.get("task_type", "unknown"),
+                             "seed": context_keys.get("seed", "unknown"),
+                             "outcome": won,
+                             "steps": self.reward_history[i]
+                         }
+                         
+                         with open(detailed_log_path, "a", encoding='utf-8') as f:
+                             f.write(json.dumps(log_entry) + "\n")
+                             
+                     except Exception as e:
+                         print(f"[CCAPO] Error writing detailed logs: {e}")
+                     
+                     # Reset history for this environment
+                     self.reward_history[i] = []
+
                  # Reset trace for next episode
                  self.ccapo_trace[i] = []
 
