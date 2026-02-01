@@ -4,38 +4,39 @@ from typing import Dict, Optional
 @dataclass
 class STDBConfig:
     enable: bool = True
-    mode: str = "update_then_evaluate"  # or "monitor_only"
+    mode: str = "update_then_evaluate"
     # Weights for Q_STDB calculation
-    weight_success: float = 1.0  # I(E) importance
-    weight_critical: float = 1.0 # C(E) importance
-    weight_utility: float = 1.0  # U(E) importance
+    weight_success: float = 1.0
+    weight_critical: float = 1.0
+    weight_utility: float = 1.0
 
     # Layering
-    layering_mode: str = "hierarchical" # "hierarchical" or "flat"
-    alpha: float = 0.5 # Weight for Local (Prompt-Level) vs Global (App-Level). Q = alpha*Q_local + (1-alpha)*Q_global
+    layering_mode: str = "hierarchical"
+    alpha: float = 0.5
 
     # v3.1 Improvements
-    alpha_prior: float = 1.0 # Beta distribution alpha (Success prior)
-    beta_prior: float = 1.0  # Beta distribution beta (Failure prior)
-    c_explore: float = 2.0   # Exploration constant for UCB-like bonus
+    alpha_prior: float = 1.0
+    beta_prior: float = 1.0
+    # [修改] 降低探索常数，防止未访问节点的奖励爆炸
+    c_explore: float = 0.1   # 原为 2.0
     
     # Reward Scaling
     enable_tanh_gating: bool = True
-    reward_scale: float = 1.0 # Max reward amplitude after tanh
-    reward_temp: float = 1.0  # Temperature for tanh scaling
+    reward_scale: float = 1.0
+    reward_temp: float = 1.0
     
     # v3.2 Normalization (Z-Score)
-    normalization_mode: str = "z_score" # "tanh" or "z_score"
-    z_score_beta: float = 0.01 # Moving average update rate (1 - momentum)
-    z_score_clip: float = 5.0  # Clip range before tanh [-5, 5]
+    normalization_mode: str = "z_score"
+    z_score_beta: float = 0.01
+    z_score_clip: float = 5.0
     
     # Cold Start Seeding
-    seed_path: Optional[str] = None # Path to expert traces json
+    seed_path: Optional[str] = None
 
 @dataclass
 class LASRConfig:
     enable: bool = True
-    beta: float = 1.0 # Tanh gating coefficient
+    beta: float = 1.0
 
 @dataclass
 class LoopPenaltyConfig:
@@ -64,9 +65,9 @@ class CCAPOConfig:
     stdb_save_path: Optional[str] = None
     
     # M_eff 效率调制参数
-    max_steps: int = 50  # Episode 最大步数
-    max_tokens: int = 10000  # Episode 最大 Token 数
+    max_steps: int = 50
+    max_tokens: int = 10000
     
     # 奖励组合参数
-    beta_micro: float = 0.5  # 微观奖励权重: R_total = (R_core * M_eff) + beta_micro * Sum(r_micro)
-
+    # [修改] 大幅降低微观权重，防止累加后淹没宏观信号
+    beta_micro: float = 0.05  # 原为 0.5

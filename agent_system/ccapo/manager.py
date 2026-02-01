@@ -150,13 +150,6 @@ class CCAPOManager:
         """
         Process a completed episode with Update-then-Evaluate logic.
         
-        1. Fingerprint the trace
-        2. Filter loops
-        3. Update STDB (with filtered trace)
-        4. Query STDB (with filtered trace) - Post-update
-        5. Compute M_eff
-        6. Return comprehensive results
-        
         Args:
             trace_actions: list of raw action strings
             outcome: Success (True) or Fail (False)
@@ -164,12 +157,7 @@ class CCAPOManager:
             tokens_used: total tokens consumed in this episode
         
         Returns:
-            Dict containing:
-            - rewards: List of micro-rewards (post-update)
-            - m_eff: efficiency modulation value
-            - correction: reward correction value
-            - filtered_trace: trace with loops removed
-            - loops_removed: list of removed loop info
+            Dict containing processed rewards and modulation factors.
         """
         result = {
             "rewards": [0.0] * len(trace_actions),
@@ -207,7 +195,7 @@ class CCAPOManager:
             context=context
         )
         
-        # 3. Query STDB BEFORE update (for comparison / pre-rewards if needed for rollout)
+        # 3. Query STDB BEFORE update
         pre_rewards, _ = self.stdb.query(filtered_trace, context=context, log_diagnostics=False)
         result["pre_rewards"] = pre_rewards
         
@@ -220,7 +208,6 @@ class CCAPOManager:
         
         # 5. Query STDB AFTER update (Update-then-Evaluate)
         post_rewards, edge_details = self.stdb.query(filtered_trace, context=context, log_diagnostics=True)
-        result["rewards"] = post_rewards
         result["post_rewards"] = post_rewards
         result["edge_details"] = edge_details
         
@@ -234,37 +221,64 @@ class CCAPOManager:
             max_steps=max_steps,
             max_tokens=max_tokens
         )
-        result["m_eff"] = m_eff_final
+        
+        # [修改逻辑 Start] -----------------------------------------------------
+        # 修复 Filibuster Bug 和 Magnitude Dominance 问题
+        
+        r_core = 1.0 if outcome else -1.0
+        
+        # A. Failure Invariance (失效不变性)
+        # 只有成功时才应用效率乘数；失败时保持全额惩罚，甚至可以不输出 m_eff 防止 Trainer 误乘
+        if outcome:
+            weighted_core = r_core * m_eff_final
+            # 传给外部 Trainer 的 m_eff
+            result["m_eff"] = m_eff_final 
+        else:
+            weighted_core = r_core 
+            # 欺骗外部 Trainer：如果是失败，告诉它 m_eff 是 1.0 (不稀释惩罚)
+            result["m_eff"] = 1.0 
+
         result["m_eff_steps"] = m_eff_steps
         result["m_eff_tokens"] = m_eff_tokens
+
+        # B. Magnitude Gating (动态幅度钳制)
+        # 计算微观奖励的总贡献 (假设 Trainer 也是用 sum)
+        raw_micro_sum = sum(post_rewards)
+        expected_micro_contribution = self.config.beta_micro * raw_micro_sum
         
-        # 记录 M_eff 诊断
-        self.diagnostics.log_m_eff(
-            steps=len(trace_actions),
-            tokens=tokens_used,
-            max_steps=max_steps,
-            max_tokens=max_tokens,
-            m_eff_steps=m_eff_steps,
-            m_eff_tokens=m_eff_tokens,
-            m_eff_final=m_eff_final,
-            context=context
-        )
+        # 设定阈值：探索奖励的总和，绝对不能超过核心奖励幅度的 30%
+        # 这样保证了 Success (1.0) 永远 > Failure + Full Exploration (-1.0 + 0.3 = -0.7)
+        threshold_ratio = 0.3
+        max_allowed_contribution = threshold_ratio * abs(weighted_core)
+        
+        # 计算缩放系数
+        scaling_factor = 1.0
+        if abs(expected_micro_contribution) > max_allowed_contribution:
+            # 如果探索分太高，进行整体降维
+            scaling_factor = max_allowed_contribution / (abs(expected_micro_contribution) + 1e-6)
+        
+        # 应用缩放系数到输出的 rewards 列表
+        # 这样 Trainer 拿到的 list 已经是安全、被压制过的数值
+        safe_rewards = [r * scaling_factor for r in post_rewards]
+        result["rewards"] = safe_rewards
+        
+        # [修改逻辑 End] -------------------------------------------------------
         
         # 7. Calculate reward correction (post - pre)
+        # 这里仅作记录用，数值可能未被 Scale，反映原始图谱变化
         correction = sum(post_rewards) - sum(pre_rewards)
         result["correction"] = correction
         
-        # 记录奖励修正诊断
-        r_core = 1.0 if outcome else -1.0
-        final_reward = (r_core * m_eff_final) + self.config.beta_micro * sum(post_rewards) if hasattr(self.config, 'beta_micro') else r_core
+        # 记录奖励修正诊断 (使用修正后的 weighted_core 和 safe_rewards 计算最终模拟分)
+        final_reward_sim = weighted_core + self.config.beta_micro * sum(safe_rewards)
         
         self.diagnostics.log_reward_correction(
             pre_rewards=pre_rewards,
-            post_rewards=post_rewards,
+            post_rewards=safe_rewards, # Log scaled rewards
             correction=correction,
             r_core=r_core,
-            m_eff=m_eff_final,
-            final_reward=final_reward,
+            m_eff=result["m_eff"], # Log effective m_eff
+            final_reward=final_reward_sim,
             context=context
         )
         
@@ -285,9 +299,9 @@ class CCAPOManager:
                     "trace_filtered": filtered_trace,
                     "loops_removed": loops_removed,
                     "outcome": outcome,
-                    "rewards_stdb": post_rewards,
+                    "rewards_stdb": safe_rewards, # Save scaled rewards
                     "edge_details": edge_details,
-                    "m_eff": m_eff_final,
+                    "m_eff": result["m_eff"],
                     "correction": correction,
                     "context": context
                 }, f, indent=2, ensure_ascii=False)
@@ -300,8 +314,8 @@ class CCAPOManager:
             "outcome": outcome,
             "context": context,
             "mean_reward_pre": sum(pre_rewards)/len(pre_rewards) if pre_rewards else 0.0,
-            "mean_reward_post": sum(post_rewards)/len(post_rewards) if post_rewards else 0.0,
-            "m_eff": m_eff_final,
+            "mean_reward_post": sum(safe_rewards)/len(safe_rewards) if safe_rewards else 0.0,
+            "m_eff": result["m_eff"],
             "correction": correction
         })
         
