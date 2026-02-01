@@ -416,6 +416,42 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                     context_keys=context_keys
                  )
                  
+                 # [FIX] CRITICAL: Inject Macro Reward (and updated Micro) into the LAST step
+                 # episode_result["rewards"] contains the full aligned rewards including the final Outcome Injection.
+                 # The last element corresponds to the current step (since done=True).
+                 if "rewards" in episode_result and len(episode_result["rewards"]) > 0:
+                     final_total_reward = episode_result["rewards"][-1]
+                     
+                     # We need to delineate what part is newly injected Macro vs what we already calculated.
+                     # manager.py: rewards_aligned[-1] += weighted_core
+                     # Let's extract just the weighted_core part to add to our running ccapo_rewards
+                     
+                     # Recalculate what manager thought the last step base was:
+                     # It sets base = post_rewards[-1] * beta_micro (if valid) else 0.
+                     # Then adds weighted_core.
+                     
+                     # Simpler approach: Trust Manager's final word on the CCAPO component for this step.
+                     # But we must preserve the 'valid_action_reward' (+0.01) env bonus we added earlier 
+                     # in this function, because Manager doesn't know about it.
+                     
+                     # So: ccapo_rewards[i] (current) = penalty + valid + immediate_micro
+                     # manager_last = recalculated_micro + weighted_core
+                     
+                     # Let's just ADD the weighted_core (Macro) part.
+                     # r_core = 1.0/-1.0 * m_eff
+                     # m_eff is in episode_result.
+                     
+                     m_eff = episode_result.get("m_eff", 1.0)
+                     r_macro = (1.0 if won else -1.0) * m_eff
+                     
+                     ccapo_rewards[i] += r_macro
+                     
+                     # Update detailed log for analysis consistency
+                     if hasattr(self, 'reward_history') and len(self.reward_history) > i and len(self.reward_history[i]) > 0:
+                         self.reward_history[i][-1]["r_macro"] = r_macro
+                         self.reward_history[i][-1]["r_total"] += r_macro
+
+                 
                  # 可选：将 M_eff 和 correction 注入到 info 中供后续使用
                  infos[i]['ccapo_m_eff'] = episode_result.get('m_eff', 1.0)
                  infos[i]['ccapo_correction'] = episode_result.get('correction', 0.0)

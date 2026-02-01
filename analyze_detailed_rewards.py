@@ -46,27 +46,20 @@ def analyze_episode(ep, gamma=0.99):
         total_r_valid += step.get("r_valid", 0.0)
         total_r_gross += step.get("r_total", 0.0)
         
+        # [FIX] Read explicitly logged r_macro if available
+        if "r_macro" in step:
+            total_r_macro += step["r_macro"]
+        
         if not step.get("valid", False):
             invalid_count += 1
         else:
             valid_count += 1
             
-    # Macro reward is usually implicit in the last step's total or injected.
-    # In our manager.py logic, r_total includes everything.
-    # Macro check: if outcome is true, last step should have huge boost?
-    # Or strict definition: Macro = Outcome Reward.
-    # Let's derive Macro by subtracting known components from Total?
-    # Or just look at the raw components if we logged them?
-    # We logged: r_loop, r_invalid, r_valid, r_stdb, r_total.
-    # r_total = loop + invalid + valid + stdb + (Macro/Core if injected)
-    # So Macro = r_total - (loop + invalid + valid + stdb)
-    
-    step_calculated_sum = sum([
-        s.get("r_loop", 0.0) + s.get("r_invalid", 0.0) + s.get("r_valid", 0.0) + s.get("r_stdb", 0.0)
-        for s in steps
-    ])
-    
-    total_r_macro = total_r_gross - step_calculated_sum
+    # Fallback derivation if r_macro wasn't logged (legacy logs)
+    if total_r_macro == 0.0 and outcome: 
+         # Try to see if gross is significantly higher than components
+         # But better to just rely on new logs.
+         pass
     
     return {
         "len": len(steps),
