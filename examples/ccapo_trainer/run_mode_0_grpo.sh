@@ -2,16 +2,14 @@
 set -x
 
 # ================= GPU 上锁配置 =================
-export CUDA_VISIBLE_DEVICES="1,2"     # 你原来就是 0,1，这里保持一致
+export CUDA_VISIBLE_DEVICES="1,2"
 GPUS_TO_LOCK=$(echo "$CUDA_VISIBLE_DEVICES" | tr ',' ' ')
 
 # 脚本退出时恢复 GPU 模式
 function cleanup {
     echo "[cleanup] 脚本结束，恢复 GPU 为默认模式..."
     for GPU_ID in $GPUS_TO_LOCK; do
-        # 建议把持久化模式也关回去（可选）
         sudo nvidia-smi -i $GPU_ID -c DEFAULT || true
-        # sudo nvidia-smi -i $GPU_ID -pm 0 || true
     done
     echo "[cleanup] 恢复完成。"
 }
@@ -35,27 +33,22 @@ sleep 2
 export VLLM_ATTENTION_BACKEND=XFORMERS
 export SWANLAB_API_KEY="oB8w36PCJxKeqwif2ijWz"
 
-# 模型路径 (请确保路径存在)
+# 模型路径
 MODEL_PATH="/home/zzh/Workspace/modelscope/models/Qwen/Qwen2.5-1.5B-Instruct"
-# MODEL_PATH="/home/zzh/Workspace/modelscope/models/Qwen/Qwen2.5-VL-3B-Instruct"
 
 # 确保 PYTHONPATH 包含当前目录和 ALFWorld 环境包
 export PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/agent_system/environments/env_package/alfworld
 
 # ================= 配置区域 =================
-# SAMPLE_SIZE=40  <-- 不再需要总数，直接指定分集大小
 DATA_SEED=42
-# TRAIN_RATIO=0.8 <-- 不再需要
-
-TRAIN_BATCH_SIZE=8
+TRAIN_BATCH_SIZE=4
 VAL_BATCH_SIZE=8
 GROUP_SIZE=4
-EXPERIMENT_NAME="ccapo_alfworld_real_run1"
+EXPERIMENT_NAME="ccapo_mode0_grpo"
 MAX_STEPS=50
 
-# 新增：显式控制数据集大小
-TRAIN_SET_SIZE=128            # 例如：4个 batch
-VAL_SET_SIZE=$VAL_BATCH_SIZE  # 强制让验证集大小等于验证 Batch Size
+TRAIN_SET_SIZE=128
+VAL_SET_SIZE=$VAL_BATCH_SIZE
 # ===========================================
 
 echo ">>> [1/2] Generating/Updating Real ALFWorld Data..."
@@ -67,9 +60,8 @@ python3 make_real_alfworld_data.py \
 
 DATA_DIR="$(pwd)/data/verl-agent/text"
 
-echo ">>> [2/2] Starting CCAPO Training with LoRA (2 GPUs)..."
+echo ">>> [2/2] Starting CCAPO Training - Mode 0: GRPO Baseline..."
 
-# 确保日志目录存在
 mkdir -p logger
 
 python3 -m verl.trainer.main_ppo \
@@ -110,25 +102,13 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
     algorithm.use_kl_in_reward=False \
     algorithm.gamma=1.0 \
-    ++algorithm.ccapo.enable_ccapo=true \
-    ++algorithm.ccapo.r_loop_penalty=-0.5 \
-    ++algorithm.ccapo.enable_update_then_evaluate=true \
-    ++algorithm.ccapo.stdb_save_path="stdb/alfworld_stdb.json" \
-    ++algorithm.ccapo.invalid_action_penalty.enable=true \
-    ++algorithm.ccapo.invalid_action_penalty.penalty_value=-0.5 \
-    ++algorithm.ccapo.stdb.c_explore=2.0 \
-    ++algorithm.ccapo.stdb.alpha_prior=1.0 \
-    ++algorithm.ccapo.stdb.beta_prior=1.0 \
-    ++algorithm.ccapo.stdb.enable_tanh_gating=true \
-    ++algorithm.ccapo.stdb.reward_scale=1.0 \
-    ++algorithm.ccapo.stdb.reward_temp=1.0 \
-    ++algorithm.ccapo.beta_micro=0.5 \
+    ++algorithm.ccapo.enable_ccapo=False \
     env.env_name=alfworld/AlfredTWEnv \
     env.seed=42 \
     env.max_steps=$MAX_STEPS \
     env.rollout.n=$GROUP_SIZE \
     trainer.logger='[console,swanlab]' \
-    trainer.project_name='verl_ccapo_debug' \
+    trainer.project_name='verl_ccapo_rollout' \
     trainer.experiment_name=$EXPERIMENT_NAME \
     trainer.n_gpus_per_node=2 \
     trainer.nnodes=1 \
@@ -136,4 +116,4 @@ python3 -m verl.trainer.main_ppo \
     trainer.test_freq=5 \
     trainer.total_epochs=1 \
     trainer.val_before_train=False \
-    2>&1 | tee logger/ccapo_run.log
+    2>&1 | tee logger/ccapo_mode0.log

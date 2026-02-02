@@ -413,6 +413,13 @@ class DataParallelPPOActor(BasePPOActor):
                              outcomes = (reward_tensor > 0.5) 
                              lengths = response_mask.sum(dim=-1)
                              sample_weights = self.ccapo.compute_loss_weights(outcomes, lengths)
+                             
+                             # [CCAPO] Log LASR weights
+                             if sample_weights is not None:
+                                 metrics["lasr/weight_mean"] = sample_weights.mean().item()
+                                 metrics["lasr/weight_max"] = sample_weights.max().item()
+                                 metrics["lasr/weight_min"] = sample_weights.min().item()
+                                 metrics["lasr/weight_std"] = sample_weights.std().item()
 
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
                         old_log_prob=old_log_prob,
