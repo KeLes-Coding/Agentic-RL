@@ -203,9 +203,66 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
         self.ccapo_trace = [[] for _ in range(len(text_obs))] # Initialize trace for each env
         self.pre_text_obs = text_obs
         self.extract_task(text_obs)
+        
+        # [CCAPO] Parse Context at Reset for STDB Querying
+        self.ep_contexts = []
+        for i in range(len(text_obs)):
+             gf = self.gamefile[i] if i < len(self.gamefile) else None
+             inst = self.tasks[i] if i < len(self.tasks) else ""
+             ctx = self._parse_context_keys(gf, inst, i)
+             self.ep_contexts.append(ctx)
 
         full_text_obs = self.build_text_obs(text_obs, self.envs.get_admissible_commands, init=True)
         return {'text': full_text_obs, 'image': image_obs, 'anchor': text_obs}, infos
+
+    def _parse_context_keys(self, gamefile: str, instruction: str, env_id: int) -> Dict[str, str]:
+        """Helper to parse task_type and seed from gamefile or instruction."""
+        task_type = "unknown_task"
+        seed = "unknown_seed"
+        parse_success = False
+        
+        if gamefile:
+            normalized_path = gamefile.replace('\\', '/')
+            parts = normalized_path.split('/')
+            
+            # Strategy 1: trial_ prefix
+            for k in range(len(parts)):
+                if parts[k].startswith("trial_"):
+                    seed = parts[k]
+                    if k > 0:
+                        task_type = parts[k-1]
+                        if "-" in task_type:
+                            task_type = task_type.split("-")[0]
+                    parse_success = True
+                    break
+            
+            # Strategy 2: known patterns
+            if not parse_success:
+                for k in range(len(parts)):
+                    for task_pattern in ["pick_and_place", "pick_two", "look_at_obj", "pick_heat", "pick_cool", "pick_clean"]:
+                        if task_pattern in parts[k]:
+                            task_type = parts[k]
+                            if k + 1 < len(parts):
+                                seed = parts[k + 1]
+                            parse_success = True
+                            break
+                    if parse_success:
+                        break
+        
+        # Fallback: Derive from instruction
+        if task_type == "unknown_task" and instruction:
+            derived_type = self._derive_task_type(instruction)
+            if derived_type != "unknown_task":
+                task_type = derived_type
+                import hashlib
+                seed = f"inst_{hashlib.md5(instruction.encode()).hexdigest()[:8]}"
+        
+        return {
+            "task_type": task_type,
+            "seed": seed,
+            "batch_id": str(env_id),
+            "gamefile": gamefile or ""
+        }
     
     def step(self, text_actions: List[str]):
         actions, valids = self.projection_f(text_actions, self.envs.get_admissible_commands)
@@ -255,7 +312,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                     if self.ccapo.stdb:
                         try:
                             # Use the updated trace which includes current action
-                            stdb_result = self.ccapo.stdb.query(self.ccapo_trace[i], log_diagnostics=False)
+                            stdb_result = self.ccapo.stdb.query(self.ccapo_trace[i], log_diagnostics=False, context=self.ep_contexts[i])
                             if isinstance(stdb_result, tuple):
                                 stdb_rewards_list, _ = stdb_result
                             else:
@@ -340,76 +397,22 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             if dones[i] and self.ccapo.config.enable:
                  won = bool(infos[i].get("won", False))
                  
-                 # Extract Context - 增强解析逻辑
-                 gamefile = infos[i].get("extra.gamefile", self.gamefile[i] if i < len(self.gamefile) else None)
+                 # Use pre-parsed context
+                 context_keys = self.ep_contexts[i]
                  
-                 task_type = "unknown_task"
-                 seed = "unknown_seed"
-                 parse_success = False
-                 
-                 if gamefile:
-                    # 兼容 Windows 和 Linux 路径
-                    normalized_path = gamefile.replace('\\', '/')
-                    parts = normalized_path.split('/')
-                    
-                    # 尝试多种解析策略
-                    # 策略1: 查找 trial_ 前缀
-                    for k in range(len(parts)):
-                        if parts[k].startswith("trial_"):
-                            seed = parts[k]
-                            if k > 0:
-                                task_type = parts[k-1]
-                                if "-" in task_type:
-                                    task_type = task_type.split("-")[0]
-                            parse_success = True
-                            break
-                    
-                    # 策略2: 如果没有 trial_，尝试其他模式
-                    if not parse_success:
-                        for k in range(len(parts)):
-                            # 查找类似 pick_and_place, look_at_obj 等任务类型
-                            for task_pattern in ["pick_and_place", "pick_two", "look_at_obj", "pick_heat", "pick_cool", "pick_clean"]:
-                                if task_pattern in parts[k]:
-                                    task_type = parts[k]
-                                    if k + 1 < len(parts):
-                                        seed = parts[k + 1]
-                                    parse_success = True
-                                    break
-                            if parse_success:
-                                break
-                 
-                 context_keys = {
-                    "task_type": task_type,
-                    "seed": seed,
-                    "batch_id": str(i),
-                    "gamefile": gamefile or ""
-                 }
-
-                 # [Fix] Fallback: If task_type is unknown, try to derive from instruction text
-                 if context_keys["task_type"] == "unknown_task" and i < len(self.tasks):
-                     instruction = self.tasks[i]
-                     derived_type = self._derive_task_type(instruction)
-                     if derived_type != "unknown_task":
-                         context_keys["task_type"] = derived_type
-                         # Use hash of instruction as seed to group identical tasks
-                         # detail: seed is used for "Local Graph". same seed = same specific problem instance.
-                         # instruction alone doesn't capturing object positions, but it's better than "unknown".
-                         import hashlib
-                         context_keys["seed"] = f"inst_{hashlib.md5(instruction.encode()).hexdigest()[:8]}"
-                         parse_success = True  # We essentially succeeded effectively
-                 
-                 # 记录 Context 解析诊断 (Update with potentially fixed values)
+                 # 记录 Context 解析诊断
                  if diagnostics:
                      diagnostics.log_episode_context(
                          env_id=i,
-                         gamefile_raw=gamefile or "",
+                         gamefile_raw=context_keys.get("gamefile", ""),
                          parsed_task_type=context_keys["task_type"],
                          parsed_seed=context_keys["seed"],
-                         parse_success=parse_success,
+                         parse_success=context_keys["task_type"] != "unknown_task",
                          won=won
                      )
 
                  # 使用 process_episode 返回值
+                 # process_episode can also accept context to ensure it updates the correct local graph
                  episode_result = self.ccapo.process_episode(
                     self.ccapo_trace[i],
                     outcome=won,
@@ -421,25 +424,6 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                  # The last element corresponds to the current step (since done=True).
                  if "rewards" in episode_result and len(episode_result["rewards"]) > 0:
                      final_total_reward = episode_result["rewards"][-1]
-                     
-                     # We need to delineate what part is newly injected Macro vs what we already calculated.
-                     # manager.py: rewards_aligned[-1] += weighted_core
-                     # Let's extract just the weighted_core part to add to our running ccapo_rewards
-                     
-                     # Recalculate what manager thought the last step base was:
-                     # It sets base = post_rewards[-1] * beta_micro (if valid) else 0.
-                     # Then adds weighted_core.
-                     
-                     # Simpler approach: Trust Manager's final word on the CCAPO component for this step.
-                     # But we must preserve the 'valid_action_reward' (+0.01) env bonus we added earlier 
-                     # in this function, because Manager doesn't know about it.
-                     
-                     # So: ccapo_rewards[i] (current) = penalty + valid + immediate_micro
-                     # manager_last = recalculated_micro + weighted_core
-                     
-                     # Let's just ADD the weighted_core (Macro) part.
-                     # r_core = 1.0/-1.0 * m_eff
-                     # m_eff is in episode_result.
                      
                      m_eff = episode_result.get("m_eff", 1.0)
                      r_macro = (1.0 if won else -1.0) * m_eff
@@ -461,8 +445,6 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                  if hasattr(self, 'reward_history') and len(self.reward_history) > i:
                      try:
                          detailed_log_path = os.path.join(self.ccapo.config.log_dir, "detailed_rewards.jsonl")
-                         # Basic check to avoid excessive file open/close matching checks, 
-                         # usually log_dir exists by now.
                          
                          log_entry = {
                              "timestamp": time.time(),

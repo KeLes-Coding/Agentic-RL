@@ -96,9 +96,18 @@ def main():
     if not episodes:
         return
 
-    stats = []
+    unknown_task_count = 0
+    task_type_stats = defaultdict(list)
+    
     for ep in episodes:
-        stats.append(analyze_episode(ep))
+        stats_entry = analyze_episode(ep)
+        stats.append(stats_entry)
+        
+        tt = ep.get("task_type", "unknown")
+        if "unknown" in str(tt) or tt is None:
+            unknown_task_count += 1
+        
+        task_type_stats[str(tt)].append(stats_entry)
         
     # Aggregate
     outcomes = [s["outcome"] for s in stats]
@@ -110,6 +119,7 @@ def main():
     avg_micro = np.mean([s["r_micro"] for s in stats])
     avg_penalty = np.mean([s["r_penalty"] for s in stats])
     avg_invalid = np.mean([s["invalid_cnt"] for s in stats])
+    avg_valid_rate = np.mean([s["valid_rate"] for s in stats])
     
     print("\n" + "="*40)
     print("       CCAPO Reward Analysis        ")
@@ -124,21 +134,36 @@ def main():
     print(f"  - Penalties    : {avg_penalty:.4f}")
     print("-" * 40)
     print(f"Invalid Actions/Ep: {avg_invalid:.2f}")
+    print(f"Valid Action Rate : {avg_valid_rate:.2%}")
     print("-" * 40)
+    print(f"Context Health:")
+    print(f"  - Unknown Tasks : {unknown_task_count} / {len(stats)}")
+    if unknown_task_count > 0:
+        print(f"  - WARNING: {unknown_task_count} episodes have bad context! STDB will be 0.")
+    
+    if len(task_type_stats) < 10:
+        print("-" * 40)
+        print("Stats by Task Type:")
+        for task, data in task_type_stats.items():
+            t_sr = np.mean([x["outcome"] for x in data])
+            t_micro = np.mean([x["r_micro"] for x in data])
+            print(f"  - {task[:20]:<20}: SR={t_sr:.2%} | Micro={t_micro:.4f} | N={len(data)}")
     
     # Sample Display
     print("\nSample Episodes (Last 3):")
     for i, ep in enumerate(episodes[-3:]):
         s = stats[-3 + i]
-        print(f"Ep {i+1} | Outcome: {s['outcome']} | Len: {s['len']} | R_Total: {s['r_gross']:.2f}")
-        print(f"    Breakdown: Macro={s['r_macro']:.2f}, Micro={s['r_micro']:.2f}, Pen={s['r_penalty']:.2f}")
+        tt = ep.get("task_type", "unknown")
+        seed = ep.get("seed", "unknown")
+        print(f"Ep {i+1} | Task: {tt} | Seed: {seed} | Outcome: {s['outcome']} | Len: {s['len']} | R_Total: {s['r_gross']:.2f}")
+        print(f"    Breakdown: Macro={s['r_macro']:.2f}, Micro={s['r_micro']:.4f}, Pen={s['r_penalty']:.2f}")
         print(f"    Invalid Actions: {s['invalid_cnt']}")
         
         # Show step details for last one
         if i == 2:
             print("    Trace Preview:")
             for j, step in enumerate(ep['steps'][:5]): # First 5
-                print(f"      Step {j+1}: {step.get('action')[:40]}... -> Valid={step.get('valid')} | R_STDB={step.get('r_stdb'):.3f}")
+                print(f"      Step {j+1}: {step.get('action')[:40]}... -> Valid={step.get('valid')} | R_STDB={step.get('r_stdb'):.4f}")
 
 if __name__ == "__main__":
     main()
