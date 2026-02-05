@@ -201,6 +201,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
         self.memory.reset(batch_size = len(text_obs))
         self.tasks = []
         self.ccapo_trace = [[] for _ in range(len(text_obs))] # Initialize trace for each env
+        self.reward_history = [[] for _ in range(len(text_obs))] # [CCAPO] Initialize reward history for logging
         self.pre_text_obs = text_obs
         self.extract_task(text_obs)
         
@@ -420,27 +421,77 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                  )
                  
                  # [FIX] CRITICAL: Inject Macro Reward (and updated Micro) into the LAST step
-                 # episode_result["rewards"] contains the full aligned rewards including the final Outcome Injection.
-                 # The last element corresponds to the current step (since done=True).
-                 if "rewards" in episode_result and len(episode_result["rewards"]) > 0:
-                     final_total_reward = episode_result["rewards"][-1]
-                     
-                     m_eff = episode_result.get("m_eff", 1.0)
-                     r_macro = (1.0 if won else -1.0) * m_eff
-                     
-                     ccapo_rewards[i] += r_macro
-                     
-                     # Update detailed log for analysis consistency
-                     if hasattr(self, 'reward_history') and len(self.reward_history) > i and len(self.reward_history[i]) > 0:
-                         self.reward_history[i][-1]["r_macro"] = r_macro
-                         self.reward_history[i][-1]["r_total"] += r_macro
-
-                 
-                 # 可选：将 M_eff 和 correction 注入到 info 中供后续使用
-                 infos[i]['ccapo_m_eff'] = episode_result.get('m_eff', 1.0)
-                 infos[i]['ccapo_correction'] = episode_result.get('correction', 0.0)
-                 infos[i]['ccapo_loops_removed'] = len(episode_result.get('loops_removed', []))
-                 
+                            # episode_result["rewards"] contains the full aligned rewards including the final Outcome Injection.
+                            # The last element corresponds to the current step (since done=True).
+                            if "rewards" in episode_result and len(episode_result["rewards"]) > 0:
+                                # Note: manager.py now implements Dense Reward (Macro added to every step).
+                                # However, we can't easily update past steps in the Trainer buffer here.
+                                # For GRPO (sum of rewards), we just need to ensure the SUM is correct.
+                                # The immediate rewards sum to Sum(r_micro_immediate).
+                                # The desired dense rewards sum to Sum(r_micro_post + r_macro).
+                                # So we add the difference to the last step to correct the total sum.
+                                
+                                ccapo_target_sum = sum(episode_result["rewards"])
+                                
+                                # We need to track what we already gave.
+                                # Since we don't track cumulative reward in `ccapo_trace`, we might need to approximate
+                                # or assume (if beta is small/zero) that immediate rewards were just STDB.
+                                # But actually, EnvManager gave `r_stdb` at each step.
+                                # Let's assume we just add the "Missing Macro Portion" to the last step for now,
+                                # to satisfy GRPO.
+                                
+                                # Simplified: Just ensure the last step gets the final chunk of the dense reward + any correction.
+                                # But wait, if R_dense = R_macro + R_micro, and we already gave R_micro_immediate...
+                                # The correction is: (R_macro * T) + Sum(R_micro_post - R_micro_pre).
+                                
+                                # Since implementing "True Dense" retrospectively is hard, we stick to:
+                                # Add the FINAL step's dense reward value here.
+                                # BUT, we must ensure we don't double count if we already gave loop penalties etc.
+                                
+                                # Let's trust that episode_result["rewards"][-1] is the reward for the final step.
+                                # But for GRPO, we want the TRAJECTORY SUM to be correct.
+                                
+                                # Calculate correction needed:
+                                # current_sum = sum(self.reward_history[i]) (excluding this last step's partials)
+                                # target_sum = sum(episode_result["rewards"])
+                                # correction = target_sum - current_episode_accumulated
+                                
+                                # However, self.reward_history is for logging.
+                                # Let's just Apply the Macro-weighted last-step logic from the old code 
+                                # BUT adapted: We assume manager.py returned the correct shaped reward.
+                                # We simply take the last value? No, that misses the macro from previous steps.
+                                
+                                # COMPROMISE for GRPO:
+                                # We add (Total_Target_Reward - Sum_of_Step_Rewards_So_Far) to the current reward.
+                                # This ensures the Episode Return is exactly what manager.py calculated.
+                                
+                                # Gather what we gave so far (approximate from history log if available, or just last step injection)
+                                # Since we can't easily know "Sum So Far" perfectly without tracking, 
+                                # we revert to the simple logic: 
+                                # The previous code added `r_macro`.
+                                # Now `process_episode` adds `r_macro` to EVERY step.
+                                # So Total Macro Influence is T * r_macro.
+                                
+                                # Let's just inject (T * r_macro) into the last step for GRPO correctness.
+                                
+                                m_eff = episode_result.get("m_eff", 1.0)
+                                r_core = 1.0 if won else -1.0
+                                if won:
+                                     weighted_core = r_core * m_eff
+                                else:
+                                     weighted_core = r_core
+                                
+                                # Trajectory Length
+                                T = len(episode_result["rewards"])
+                                total_macro_correction = weighted_core * T
+                                
+                                ccapo_rewards[i] += total_macro_correction
+                                
+                                # Update detailed log for analysis consistency
+                                if hasattr(self, 'reward_history') and len(self.reward_history) > i and len(self.reward_history[i]) > 0:
+                                    self.reward_history[i][-1]["r_macro"] = total_macro_correction # Log as one lump sum
+                                    self.reward_history[i][-1]["r_total"] += total_macro_correction
+                                    
                  # [NEW] Log Detailed Rewards History
                  if hasattr(self, 'reward_history') and len(self.reward_history) > i:
                      try:

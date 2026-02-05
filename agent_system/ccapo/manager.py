@@ -238,19 +238,21 @@ class CCAPOManager:
                 # [Case A] 循环/回溯步：给予惩罚，忽略 STDB 分数
                 rewards_aligned[i] = -abs(loop_pen)
             else:
-                # [Case B] 有效步：填入 STDB 边质量分数
+                # [Case B] 有效步：填入 STDB 边质量分数 + 宏观奖励 (Dense Reward)
+                # Formula: R_step = (R_core * M_eff) + beta * r_micro
                 if filtered_idx_counter < len(post_rewards):
                     # R_micro = beta * R_stdb
-                    rewards_aligned[i] = post_rewards[filtered_idx_counter] * beta_micro
+                    r_micro = post_rewards[filtered_idx_counter] * beta_micro
+                    # Dense Addition
+                    rewards_aligned[i] = weighted_core + r_micro
+                    
                     filtered_idx_counter += 1
                 else:
-                    rewards_aligned[i] = 0.0
-
-        # [Case C] 注入宏观结果 (Macro Injection)
-        # 在最后一步叠加结果奖励。注意：最后一步可能是循环（虽然少见），也可能是有效步。
-        # 无论如何，Outcome 必须加上去。
-        if len(rewards_aligned) > 0:
-            rewards_aligned[-1] += weighted_core
+                    rewards_aligned[i] = weighted_core # 即使没有边分数，也给宏观分？(Edge case)
+        
+        # [Case C] 宏观结果已在每一步注入，不再需要在最后叠加
+        # if len(rewards_aligned) > 0:
+        #     rewards_aligned[-1] += weighted_core
             
         result["rewards"] = rewards_aligned
         

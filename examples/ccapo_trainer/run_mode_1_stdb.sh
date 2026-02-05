@@ -34,13 +34,13 @@ export PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/agent_system/environments/env_packag
 
 # ================= 配置区域 =================
 DATA_SEED=42
-TRAIN_BATCH_SIZE=4
+TRAIN_BATCH_SIZE=8
 VAL_BATCH_SIZE=8
 GROUP_SIZE=4
-EXPERIMENT_NAME="ccapo_mode1_stdb"
+EXPERIMENT_NAME="ccapo_mode0_grpo"
 MAX_STEPS=50
 
-TRAIN_SET_SIZE=128
+TRAIN_SET_SIZE=200
 VAL_SET_SIZE=$VAL_BATCH_SIZE
 # ===========================================
 
@@ -113,4 +113,5 @@ python3 -m verl.trainer.main_ppo \
     trainer.test_freq=5 \
     trainer.total_epochs=1 \
     trainer.val_before_train=False \
+    ++algorithm.ccapo.log_dir="logger" \
     2>&1 | tee logger/ccapo_mode1.log
