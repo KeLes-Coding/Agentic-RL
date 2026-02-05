@@ -136,3 +136,6 @@ logger/
 local_logger/
 stdb/
 .claude/
+logger*
+local_logger*
+stdb*
