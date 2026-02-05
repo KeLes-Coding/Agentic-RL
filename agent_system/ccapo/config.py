@@ -2,36 +2,26 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 @dataclass
+@dataclass
 class STDBConfig:
     enable: bool = True
-    mode: str = "update_then_evaluate"
-    # Weights for Q_STDB calculation
-    weight_success: float = 1.0
-    weight_critical: float = 1.0
-    weight_utility: float = 1.0
-
-    # Layering
-    layering_mode: str = "hierarchical"
-    alpha: float = 0.5
-
-    # v3.1 Improvements
-    alpha_prior: float = 1.0
-    beta_prior: float = 1.0
-    # [修改] 降低探索常数，防止未访问节点的奖励爆炸
-    c_explore: float = 0.1   # 原为 2.0
     
-    # Reward Scaling
-    enable_tanh_gating: bool = True
-    reward_scale: float = 1.0
-    reward_temp: float = 1.0
+    # Layering & Cascading Query
+    lambda_gen: float = 0.8  # 泛化置信度折损
     
-    # v3.2 Normalization (Z-Score)
-    normalization_mode: str = "z_score"
-    z_score_beta: float = 0.01
-    z_score_clip: float = 5.0
+    # Edge Scoring Factors
+    alpha_dist: float = 0.5  # 距离衰减指数
+    epsilon: float = 1e-6    # 防止除零
     
     # Cold Start Seeding
     seed_path: Optional[str] = None
+    stdb_save_path: Optional[str] = None  # Moved from CCAPOConfig to keep it self-contained if needed, or keep in CCAPOConfig. 
+    # Actually, manager uses config.stdb_save_path from CCAPOConfig usually, let's check. 
+    # Manager uses self.config.stdb_save_path.
+    
+    # Legacy parameters removed: 
+    # weight_success, weight_critical, weight_utility, c_explore, 
+    # z_score_beta, z_score_clip, normalization_mode, reward_scale, reward_temp
 
 @dataclass
 class LASRConfig:
@@ -41,7 +31,7 @@ class LASRConfig:
 @dataclass
 class LoopPenaltyConfig:
     enable: bool = True
-    penalty_value: float = -0.1
+    penalty_value: float = -1.0  # Forced to -1.0 per v3.0
 
 @dataclass
 class InvalidActionPenaltyConfig:
@@ -52,7 +42,6 @@ class InvalidActionPenaltyConfig:
 class CCAPOConfig:
     """
     Main Configuration for CCAPO v3.0.
-    Supports ablation studies via enable flags.
     """
     enable: bool = True
     stdb: STDBConfig = field(default_factory=STDBConfig)
@@ -69,5 +58,8 @@ class CCAPOConfig:
     max_tokens: int = 10000
     
     # 奖励组合参数
-    # [修改] 大幅降低微观权重，防止累加后淹没宏观信号
-    beta_micro: float = 0.05  # 原为 0.5
+    # v3.0: 归一化加性奖励，直接相加。
+    # Success: 1.0 + r_micro
+    # Failure: -1.0 + r_micro
+    # 保持 beta_micro 但默认设为 1.0，除非需要微调幅度。
+    beta_micro: float = 1.0

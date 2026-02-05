@@ -148,13 +148,8 @@ class CCAPOManager:
         tokens_used: int = 0
     ) -> Dict[str, Any]:
         """
-        Process a completed episode.
-        Logic:
-        - Micro Reward (STDB): Added to each valid step.
-        - Macro Reward (Outcome): Added to the last step (Success/Fail).
-        - Loop Penalty: Replaces STDB reward for invalid steps.
+        Process a completed episode (CCAPO v3.0 Unified Routing).
         """
-        # 初始化 reward 向量，长度严格等于原始 trace
         rewards_aligned = [0.0] * len(trace_actions)
         
         result = {
@@ -166,9 +161,9 @@ class CCAPOManager:
             "loops_removed": []
         }
         
-        # 计算 M_eff (效率系数)
-        max_steps = self.config.max_steps if hasattr(self.config, 'max_steps') else 50
-        max_tokens = self.config.max_tokens if hasattr(self.config, 'max_tokens') else 10000
+        # 1. Compute M_eff (Macro Efficiency)
+        max_steps = self.config.max_steps
+        max_tokens = self.config.max_tokens
         
         m_eff_steps, m_eff_tokens, m_eff_final = compute_m_eff(
             steps=len(trace_actions),
@@ -177,171 +172,90 @@ class CCAPOManager:
             max_tokens=max_tokens
         )
         
-        # 1. 计算核心宏观奖励 (Macro Reward)
-        # 只有成功时应用 M_eff，失败时保持 -1.0
-        r_core = 1.0 if outcome else -1.0
-        weighted_core = r_core * m_eff_final if outcome else r_core
-        
-        # 记录 m_eff 供 Trainer 参考（虽然这里已经乘进去了）
-        result["m_eff"] = m_eff_final if outcome else 1.0
+        result["m_eff"] = m_eff_final
         result["m_eff_steps"] = m_eff_steps
         result["m_eff_tokens"] = m_eff_tokens
 
-        # 如果未启用 CCAPO，直接返回仅包含结果的奖励
+        # If CCAPO disabled, return sparse reward only (at last step)
         if not self.config.enable or not self.stdb:
-            rewards_aligned[-1] = weighted_core
+            r_outcome = 1.0 if outcome else -1.0
+            # Apply M_eff only to success?
+            final_r = r_outcome * m_eff_final if outcome else r_outcome
+            rewards_aligned[-1] = final_r
             result["rewards"] = rewards_aligned
             return result
         
         context = context_keys or {}
             
-        # 2. 轨迹指纹化与循环过滤
+        # 2. Fingerprinting & Loop Filtering
         fp_trace = [fingerprint_alfworld(a) for a in trace_actions]
         filtered_trace, loops_removed = filter_loops(fp_trace)
         
         result["filtered_trace"] = filtered_trace
         result["loops_removed"] = loops_removed
         
-        # 诊断日志
-        self.diagnostics.log_stdb_update(
-            trace_raw=trace_actions,
-            trace_fp=fp_trace,
-            trace_filtered=filtered_trace,
-            loops_removed=loops_removed,
-            outcome=outcome,
-            context=context
-        )
+        # 3. STDB Interaction
+        # Workflow A (Success): Update-then-Evaluate
+        # Workflow B (Failure): Direct Query (No Update) v3.0 Rule
         
-        # 3. STDB Update-then-Evaluate 流程
-        # Query Pre (仅用于记录 correction)
-        pre_rewards, _ = self.stdb.query(filtered_trace, context=context, log_diagnostics=False)
+        if outcome:
+            self.stdb.update(filtered_trace, outcome, context=context)
+            if self.config.stdb_save_path:
+                self.stdb.save(self.config.stdb_save_path)
         
-        # Update
-        self.stdb.update(filtered_trace, outcome, context=context)
-        if self.config.stdb_save_path:
-            self.stdb.save(self.config.stdb_save_path)
-            
-        # Query Post (获取当前的边质量 R_micro)
-        post_rewards, edge_details = self.stdb.query(filtered_trace, context=context, log_diagnostics=True)
+        # Query (Get r_micro for all edges)
+        r_micro_list, edge_details = self.stdb.query(filtered_trace, context=context, log_diagnostics=True)
         result["edge_details"] = edge_details
         
-        # 4. 奖励对齐与合成 (Alignment & Composition)
-        # 目标：构建 R = R_micro + R_macro (Last Step)
-        
+        # 4. Unified Reward Routing (Additive Architecture)
         removed_indices = {item['index']: item for item in loops_removed}
         filtered_idx_counter = 0
-        loop_pen = self.get_loop_penalty()
-        beta_micro = self.config.beta_micro  # STDB 权重的缩放系数
+        loop_pen = self.config.loop_penalty.penalty_value # -1.0
         
+        # Base Reward/Penalty
+        if outcome:
+            # Success Trajectory: Base = 1.0 * M_eff
+            base_val = 1.0 * m_eff_final
+        else:
+            # Failure Trajectory: Base = -1.0
+            base_val = -1.0
+            
+        # Iterate original trace to align rewards
         for i in range(len(trace_actions)):
-            if i in removed_indices:
-                # [Case A] 循环/回溯步：给予惩罚，忽略 STDB 分数
-                rewards_aligned[i] = -abs(loop_pen)
+            current_r_micro = 0.0
+            is_loop = i in removed_indices
+            
+            if is_loop:
+                # Loop/Backtrack: Force r_micro = -1.0 (or loop_pen)
+                current_r_micro = loop_pen
             else:
-                # [Case B] 有效步：填入 STDB 边质量分数 + 宏观奖励 (Dense Reward)
-                # Formula: R_step = (R_core * M_eff) + beta * r_micro
-                if filtered_idx_counter < len(post_rewards):
-                    # R_micro = beta * R_stdb
-                    r_micro = post_rewards[filtered_idx_counter] * beta_micro
-                    # Dense Addition
-                    rewards_aligned[i] = weighted_core + r_micro
-                    
+                # Valid Step: Get from STDB Query
+                if filtered_idx_counter < len(r_micro_list):
+                    current_r_micro = r_micro_list[filtered_idx_counter]
                     filtered_idx_counter += 1
                 else:
-                    rewards_aligned[i] = weighted_core # 即使没有边分数，也给宏观分？(Edge case)
-        
-        # [Case C] 宏观结果已在每一步注入，不再需要在最后叠加
-        # if len(rewards_aligned) > 0:
-        #     rewards_aligned[-1] += weighted_core
+                    current_r_micro = 0.0
+
+            # Calculate Final Step Reward
+            # Additive Combination
+            # If loop, force term to be loop_pen (ignoring beta usually, or loop_pen is already scaled? Assume raw)
+            
+            if is_loop:
+                term_micro = current_r_micro 
+            else:
+                term_micro = current_r_micro * self.config.beta_micro
+            
+            step_reward = base_val + term_micro
+            
+            # Sea-Level Constraint for Failure: max 0
+            if not outcome:
+                 step_reward = min(0.0, step_reward)
+
+            rewards_aligned[i] = step_reward
             
         result["rewards"] = rewards_aligned
         
-        # 5. 记录统计信息
-        correction = sum(post_rewards) - sum(pre_rewards)
-        result["correction"] = correction
-        
-        self.diagnostics.log_reward_correction(
-            pre_rewards=pre_rewards,
-            post_rewards=post_rewards, # Log raw STDB output
-            correction=correction,
-            r_core=weighted_core,
-            m_eff=result["m_eff"],
-            final_reward=sum(rewards_aligned),
-            context=context
-        )
-        
-        # 6. Compute M_eff
-        max_steps = self.config.max_steps if hasattr(self.config, 'max_steps') else 50
-        max_tokens = self.config.max_tokens if hasattr(self.config, 'max_tokens') else 10000
-        
-        m_eff_steps, m_eff_tokens, m_eff_final = compute_m_eff(
-            steps=len(trace_actions),
-            tokens=tokens_used,
-            max_steps=max_steps,
-            max_tokens=max_tokens
-        )
-        
-        # [修改逻辑 Start] -----------------------------------------------------
-        # 修复 Filibuster Bug 和 Magnitude Dominance 问题
-        
-        r_core = 1.0 if outcome else -1.0
-        
-        # A. Failure Invariance (失效不变性)
-        # 只有成功时才应用效率乘数；失败时保持全额惩罚，甚至可以不输出 m_eff 防止 Trainer 误乘
-        if outcome:
-            weighted_core = r_core * m_eff_final
-            # 传给外部 Trainer 的 m_eff
-            result["m_eff"] = m_eff_final 
-        else:
-            weighted_core = r_core 
-            # 欺骗外部 Trainer：如果是失败，告诉它 m_eff 是 1.0 (不稀释惩罚)
-            result["m_eff"] = 1.0 
-
-        result["m_eff_steps"] = m_eff_steps
-        result["m_eff_tokens"] = m_eff_tokens
-
-        # B. Magnitude Gating (动态幅度钳制)
-        # 计算微观奖励的总贡献 (假设 Trainer 也是用 sum)
-        raw_micro_sum = sum(post_rewards)
-        expected_micro_contribution = self.config.beta_micro * raw_micro_sum
-        
-        # 设定阈值：探索奖励的总和，绝对不能超过核心奖励幅度的 30%
-        # 这样保证了 Success (1.0) 永远 > Failure + Full Exploration (-1.0 + 0.3 = -0.7)
-        threshold_ratio = 0.3
-        max_allowed_contribution = threshold_ratio * abs(weighted_core)
-        
-        # 计算缩放系数
-        scaling_factor = 1.0
-        if abs(expected_micro_contribution) > max_allowed_contribution:
-            # 如果探索分太高，进行整体降维
-            scaling_factor = max_allowed_contribution / (abs(expected_micro_contribution) + 1e-6)
-        
-        # 应用缩放系数到输出的 rewards 列表
-        # 这样 Trainer 拿到的 list 已经是安全、被压制过的数值
-        safe_rewards = [r * scaling_factor for r in post_rewards]
-        result["rewards"] = safe_rewards
-        
-        # [修改逻辑 End] -------------------------------------------------------
-        
-        # 7. Calculate reward correction (post - pre)
-        # 这里仅作记录用，数值可能未被 Scale，反映原始图谱变化
-        correction = sum(post_rewards) - sum(pre_rewards)
-        result["correction"] = correction
-        
-        # 记录奖励修正诊断 (使用修正后的 weighted_core 和 safe_rewards 计算最终模拟分)
-        final_reward_sim = weighted_core + self.config.beta_micro * sum(safe_rewards)
-        
-        self.diagnostics.log_reward_correction(
-            pre_rewards=pre_rewards,
-            post_rewards=safe_rewards, # Log scaled rewards
-            correction=correction,
-            r_core=r_core,
-            m_eff=result["m_eff"], # Log effective m_eff
-            final_reward=final_reward_sim,
-            context=context
-        )
-        
-        # 8. Save trace to JSON (structured logging)
+        # 5. Logging & Diagnostics
         if context:
             task_type = context.get("task_type", "unknown_task")
             seed = str(context.get("seed", "unknown_seed"))
@@ -349,35 +263,20 @@ class CCAPOManager:
             
             struct_dir = os.path.join(self.logger.log_dir, "trajectories", batch_id, task_type, seed)
             os.makedirs(struct_dir, exist_ok=True)
-            
             trace_file = os.path.join(struct_dir, f"trace_{int(time.time()*1000)}.json")
-            with open(trace_file, 'w') as f:
-                json.dump({
-                    "trace_raw": trace_actions,
-                    "trace_fp": fp_trace,
-                    "trace_filtered": filtered_trace,
-                    "loops_removed": loops_removed,
-                    "outcome": outcome,
-                    "rewards_stdb": safe_rewards, # Save scaled rewards
-                    "edge_details": edge_details,
-                    "m_eff": result["m_eff"],
-                    "correction": correction,
-                    "context": context
-                }, f, indent=2, ensure_ascii=False)
-        
-        # Log Update to central log
-        self.logger.log_ccapo_debug("stdb_update", {
-            "trace_len": len(fp_trace),
-            "filtered_len": len(filtered_trace),
-            "loops_removed": len(loops_removed),
-            "outcome": outcome,
-            "context": context,
-            "mean_reward_pre": sum(pre_rewards)/len(pre_rewards) if pre_rewards else 0.0,
-            "mean_reward_post": sum(safe_rewards)/len(safe_rewards) if safe_rewards else 0.0,
-            "m_eff": result["m_eff"],
-            "correction": correction
-        })
-        
+            try:
+                with open(trace_file, 'w') as f:
+                    json.dump({
+                        "trace_raw": trace_actions,
+                        "trace_fp": fp_trace,
+                        "outcome": outcome,
+                        "rewards": rewards_aligned,
+                        "m_eff": m_eff_final,
+                        "context": context
+                    }, f, indent=2)
+            except:
+                pass
+
         return result
 
     def compute_loss_weights(self, outcomes, lengths):
@@ -387,14 +286,7 @@ class CCAPOManager:
         return compute_lasr_weights(outcomes, lengths, self.config.lasr)
         
     def get_loop_penalty(self) -> float:
-        if self.config.enable and self.config.loop_penalty.enable:
-            return self.config.loop_penalty.penalty_value
-        return 0.0
-
+         return self.config.loop_penalty.penalty_value
+         
     def get_invalid_action_penalty(self) -> float:
-        """
-        Returns the penalty for invalid format or hallucinated actions.
-        """
-        if self.config.enable and self.config.invalid_action_penalty.enable:
-            return self.config.invalid_action_penalty.penalty_value
-        return 0.0
+         return self.config.invalid_action_penalty.penalty_value
