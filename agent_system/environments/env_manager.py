@@ -475,7 +475,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                      # Let's just inject (T * r_macro) into the last step for GRPO correctness.
                      
                      m_eff = episode_result.get("m_eff", 1.0)
-                     r_core = 1.0 if won else -1.0
+                     r_core = 1.0 if won else 0.0
                      if won:
                           weighted_core = r_core * m_eff
                      else:

@@ -3,6 +3,7 @@ from collections import defaultdict
 from typing import List, Dict, Tuple, Optional
 from .config import STDBConfig
 from .diagnostics import get_diagnostics
+from .fingerprint import fingerprint_alfworld
 
 class STDB:
     """

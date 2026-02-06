@@ -136,6 +136,7 @@ logger/
 local_logger/
 stdb/
 .claude/
-logger*
-local_logger*
-stdb*
+logger*/
+local_logger*/
+stdb*/
+training_metrics/
