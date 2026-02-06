@@ -209,7 +209,12 @@ class CCAPOManager:
         
         # 4. Unified Reward Routing (Additive Architecture)
         removed_indices = {item['index']: item for item in loops_removed}
-        filtered_idx_counter = 0
+        
+        # [FIX] Start from 1. 
+        # r_micro_list[0] is the start node score (0.0). 
+        # r_micro_list[1] corresponds to the transition created by filtered_trace[0].
+        filtered_idx_counter = 1 
+        
         loop_pen = self.config.loop_penalty.penalty_value # -1.0
         
         # Base Reward/Penalty
@@ -217,8 +222,11 @@ class CCAPOManager:
             # Success Trajectory: Base = 1.0 * M_eff
             base_val = 1.0 * m_eff_final
         else:
-            # Failure Trajectory: Base = -1.0
-            base_val = -1.0
+            # [FIX] Relax Failure Penalty to Encourge Exploration
+            # Failure Trajectory: Base = 0.0 (Neutral) instead of -1.0
+            # This prevents the "suicide drive" where agent prefers short failures.
+            # Only Loops/Invalid actions will trigger negative rewards.
+            base_val = 0.0
             
         # Iterate original trace to align rewards
         for i in range(len(trace_actions)):
@@ -234,11 +242,11 @@ class CCAPOManager:
                     current_r_micro = r_micro_list[filtered_idx_counter]
                     filtered_idx_counter += 1
                 else:
+                    # Last step or out of bounds
                     current_r_micro = 0.0
 
             # Calculate Final Step Reward
             # Additive Combination
-            # If loop, force term to be loop_pen (ignoring beta usually, or loop_pen is already scaled? Assume raw)
             
             if is_loop:
                 term_micro = current_r_micro 

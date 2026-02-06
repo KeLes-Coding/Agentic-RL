@@ -53,17 +53,22 @@ class STDB:
                 
             count = 0
             for item in data:
-                trace = item.get("trace", [])
+                trace_raw = item.get("trace", [])
                 outcome = item.get("outcome", False)
                 context = {
                     "task_type": item.get("task_type", "default_task"),
                     "seed": str(item.get("seed", "default_seed"))
                 }
-                # Use manager's fingerprinting if needed, but here assume data is clean
-                if outcome: # Only seed successes per v3.0 philosophy? 
-                    # Or seed everything? v3.0 says "Failure ... Direct Query".
-                    # Let's seed only successes to build the "High Trust" graph.
-                    self.update(trace, outcome, context)
+                
+                # [FIX] Apply fingerprinting to ensure seed data matches runtime queries
+                if outcome: 
+                    # Only seed successes per v3.0 philosophy
+                    trace_fp = [fingerprint_alfworld(a) for a in trace_raw]
+                    
+                    # Optional: Basic loop filtering for seed data could be added here,
+                    # but we assume seed data (demonstrations) are relatively clean.
+                    
+                    self.update(trace_fp, outcome, context)
                     count += 1
                 
             print(f"[STDB] Seeded {count} successful traces from {json_path}")
