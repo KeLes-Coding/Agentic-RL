@@ -97,11 +97,11 @@ python3 -m verl.trainer.main_ppo \
     algorithm.gamma=1.0 \
     ++algorithm.ccapo.enable_ccapo=true \
     ++algorithm.ccapo.beta_micro=0.1 \
-    ++algorithm.ccapo.r_loop_penalty=-0.5 \
+    ++algorithm.ccapo.r_loop_penalty=0.0 \
     ++algorithm.ccapo.enable_update_then_evaluate=true \
     ++algorithm.ccapo.stdb_save_path="stdb/alfworld_stdb.json" \
     ++algorithm.ccapo.invalid_action_penalty.enable=true \
-    ++algorithm.ccapo.invalid_action_penalty.penalty_value=-0.5 \
+    ++algorithm.ccapo.invalid_action_penalty.penalty_value=0.0 \
     ++algorithm.ccapo.stdb.c_explore=2.0 \
     ++algorithm.ccapo.stdb.alpha_prior=1.0 \
     ++algorithm.ccapo.stdb.beta_prior=1.0 \
