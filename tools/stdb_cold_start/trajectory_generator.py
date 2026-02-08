@@ -176,6 +176,7 @@ class SingleEnvRunner:
                 )
                 
                 # 执行动作
+                logger.debug(f"Task {task_info.task_id} Step {step}: Actions: {action_parsed}")
                 obs, scores, dones, infos = self.env.step([action_parsed])
                 
                 if isinstance(obs, (list, tuple)):
@@ -189,6 +190,9 @@ class SingleEnvRunner:
                 
                 done = dones[0] if isinstance(dones, list) else dones
                 info = infos if isinstance(infos, dict) else {}
+                
+                # Debug logging for step result
+                # logger.debug(f"Task {task_info.task_id} Step {step}: Done={done}, Won={info.get('won', False)}")
                 
                 # 更新admissible_actions
                 new_admissible = info.get('admissible_commands', [[]])
@@ -206,6 +210,8 @@ class SingleEnvRunner:
                     won = won[0]
                 
                 if done or won:
+                    if not won:
+                         logger.warning(f"Task {task_info.task_id} ended early at step {step}. Done={done}, Won={won}. Info keys: {list(info.keys())}. Obs: {observation[:100]}...")
                     result.success = won
                     break
             
@@ -250,14 +256,7 @@ class TrajectoryGenerator:
         """Ensure ALFWorld configuration exists and is valid"""
         config_path = os.path.expanduser(self.config.alfworld_config)
         
-        # Check if the target config file already exists
-        if os.path.exists(config_path):
-            logger.info(f"Using existing ALFWorld config at {config_path}")
-            return
-
-        logger.warning(f"ALFWorld config not found at {config_path}")
-        
-        # Try to find the canonical config within the project structure
+        # Try to find the canonical config within the project structure first
         # We start searching from the directory where this script is located (tools/stdb_cold_start)
         # and go up to the project root.
         current_file = Path(__file__).resolve()
@@ -270,12 +269,17 @@ class TrajectoryGenerator:
                 import shutil
                 os.makedirs(os.path.dirname(config_path), exist_ok=True)
                 shutil.copy2(canonical_config_path, config_path)
-                logger.info(f"Copied canonical config to {config_path}")
-                return
+                logger.info(f"Overwrote ALFWorld config at {config_path} with canonical version")
+                # return # Do not return, just verifying it was copied.
             except Exception as e:
                 logger.error(f"Failed to copy canonical config: {e}")
         else:
             logger.warning(f"Canonical ALFWorld config not found at {canonical_config_path}")
+            
+            # Only use fallback or existing if canonical lookup failed
+            if os.path.exists(config_path):
+                logger.info(f"Using existing ALFWorld config at {config_path}")
+                return
 
         # Fallback: Default configuration content (if canonical file is missing)
         base_config_content = """dataset:
