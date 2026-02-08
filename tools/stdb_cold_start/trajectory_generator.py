@@ -188,7 +188,12 @@ class SingleEnvRunner:
                 if isinstance(observation, (list, tuple)):
                     observation = observation[0]
                 
-                done = dones[0] if isinstance(dones, list) else dones
+                # Fix: Handle both list and tuple for dones
+                if isinstance(dones, (list, tuple)):
+                    done = dones[0]
+                else:
+                    done = dones
+                
                 info = infos if isinstance(infos, dict) else {}
                 
                 # Debug logging for step result
@@ -196,8 +201,12 @@ class SingleEnvRunner:
                 
                 # 更新admissible_actions
                 new_admissible = info.get('admissible_commands', [[]])
-                if isinstance(new_admissible, list) and len(new_admissible) > 0:
-                    admissible_actions = new_admissible[0] if isinstance(new_admissible[0], list) else new_admissible
+                if isinstance(new_admissible, (list, tuple)) and len(new_admissible) > 0:
+                    val = new_admissible[0]
+                    if isinstance(val, (list, tuple)):
+                        admissible_actions = val
+                    else:
+                        admissible_actions = new_admissible
                 
                 step_info.env_feedback = observation
                 raw_trace.append(step_info)
@@ -205,9 +214,11 @@ class SingleEnvRunner:
                 action_history.append((observation, action_parsed))
                 
                 # 检查是否完成
-                won = info.get('won', [False])
-                if isinstance(won, list):
-                    won = won[0]
+                won_val = info.get('won', [False])
+                if isinstance(won_val, (list, tuple)):
+                    won = won_val[0]
+                else:
+                    won = won_val
                 
                 if done or won:
                     if not won:
