@@ -59,6 +59,14 @@ class TaskSampler:
         df = pd.read_parquet(parquet_path)
         logger.info(f"Loaded {len(df)} tasks from parquet")
         
+        # 调试：打印前3条路径和解析结果
+        if len(df) > 0:
+            logger.info("Debug: First 3 paths in parquet:")
+            for i in range(min(3, len(df))):
+                path = df.iloc[i]['game_path']
+                extracted_type = self._extract_task_type_from_path(path)
+                logger.info(f"  Path: {path} -> Type: {extracted_type}")
+        
         # 按任务类型分组并采样
         rng = random.Random(seed)
         sampled_tasks = []
@@ -141,10 +149,28 @@ class TaskSampler:
     def _extract_task_type_from_path(self, game_path: str) -> str:
         """从游戏目录路径提取任务类型"""
         # 路径格式: .../json_2.1.1/train/<task_type>/...
-        parts = game_path.replace("\\", "/").split("/")
+        game_path_norm = game_path.replace("\\", "/")
+        
+        # 1. 尝试直接匹配已知的任务类型
+        for task_type in self.task_types:
+            # 任务类型目录通常是 "task_type-id-hash" 格式
+            pattern1 = f"/{task_type}-"
+            pattern2 = f"/{task_type}/"
+            if pattern1 in game_path_norm or pattern2 in game_path_norm or \
+               game_path_norm.startswith(f"{task_type}-") or game_path_norm.startswith(f"{task_type}/"):
+                return task_type
+        
+        # 2. 尝试从 split 目录后提取
+        parts = game_path_norm.split("/")
         for i, part in enumerate(parts):
-            if part == "train" and i + 1 < len(parts):
-                return parts[i + 1]
+            if part in ["train", "valid_seen", "valid_unseen"] and i + 1 < len(parts):
+                # 提取潜在的任务目录名
+                potential_task_dir = parts[i+1]
+                # 尝试匹配前缀
+                for task_type in self.task_types:
+                    if potential_task_dir.startswith(task_type):
+                        return task_type
+        
         return "unknown"
     
     def scan_all_tasks(self) -> Dict[str, List[str]]:
