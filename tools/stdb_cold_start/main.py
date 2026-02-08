@@ -93,7 +93,7 @@ def main():
     
     # 任务配置
     parser.add_argument("--samples-per-type", type=int, default=20,
-                       help="每种任务类型采样数量 (default: 20)")
+                       help="每种任务类型采样数量 (default: 1)")
     parser.add_argument("--task-types", nargs="+", help="指定任务类型（默认全部6种）")
     parser.add_argument("--max-steps", type=int, default=50,
                        help="每个episode最大步数 (default: 50)")
@@ -101,8 +101,8 @@ def main():
                        help="每个任务最大重试次数 (default: 5)")
     
     # 并发配置
-    parser.add_argument("--workers", type=int, default=6,
-                       help="并发worker数量 (default: 4)")
+    parser.add_argument("--workers", type=int, default=1,
+                       help="并发worker数量 (default: 1)")
     
     # 输出配置
     parser.add_argument("--output-dir", type=str, default="stdb_cold_start_output",
