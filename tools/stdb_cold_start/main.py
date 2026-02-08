@@ -231,6 +231,54 @@ def main():
         
         logger.info(f"Sampled {len(tasks)} tasks")
         
+        # Step 1.5: 增量检测 - 检查已有数据，计算需要生成的任务
+        logger.info("Step 1.5: Checking existing data for incremental generation...")
+        exporter = STDBExporter(config)
+        existing_data = exporter.load_existing_data()
+        existing_counts = exporter.count_by_task_type(existing_data)
+        existing_seeds = exporter.get_existing_seeds(existing_data)
+        
+        total_existing = len(existing_data)
+        logger.info(f"Found {total_existing} existing traces")
+        for task_type, count in existing_counts.items():
+            logger.info(f"  {task_type}: {count}")
+        
+        # 过滤掉已经生成过的任务（按seed去重）
+        tasks_to_generate = [t for t in tasks if t.seed not in existing_seeds]
+        
+        # 按任务类型计算还需要生成多少
+        target_per_type = config.samples_per_type
+        tasks_by_type = {}
+        for task in tasks_to_generate:
+            if task.task_type not in tasks_by_type:
+                tasks_by_type[task.task_type] = []
+            tasks_by_type[task.task_type].append(task)
+        
+        # 筛选每种类型只生成差量
+        final_tasks = []
+        for task_type, type_tasks in tasks_by_type.items():
+            existing_count = existing_counts.get(task_type, 0)
+            needed = max(0, target_per_type - existing_count)
+            
+            if needed == 0:
+                logger.info(f"  {task_type}: already have {existing_count} >= {target_per_type}, skipping")
+            else:
+                selected = type_tasks[:needed]
+                final_tasks.extend(selected)
+                logger.info(f"  {task_type}: have {existing_count}, need {needed}, will generate {len(selected)}")
+        
+        # 检查是否需要生成
+        if not final_tasks:
+            logger.info("=" * 60)
+            logger.info("✅ 已有足够的轨迹数据，无需生成新数据")
+            logger.info(f"   总轨迹数: {total_existing}")
+            logger.info(f"   目标每类: {target_per_type}")
+            logger.info("=" * 60)
+            print(f"\n✅ 已有 {total_existing} 条轨迹，目标 {target_per_type}*{len(config.task_types)}={target_per_type*len(config.task_types)}，无需生成")
+            return
+        
+        logger.info(f"Will generate {len(final_tasks)} new trajectories")
+        
         # 2. 生成轨迹
         logger.info("Step 2: Generating trajectories...")
         generator = TrajectoryGenerator(config)
@@ -241,27 +289,27 @@ def main():
         except ImportError:
             callback = None
         
-        results = generator.generate_all(tasks, progress_callback=callback)
+        results = generator.generate_all(final_tasks, progress_callback=callback)
         
-        # 3. 导出结果
-        logger.info("Step 3: Exporting results...")
-        exporter = STDBExporter(config)
-        stats = exporter.export(results)
+        # 3. 增量导出结果
+        logger.info("Step 3: Exporting results (incremental)...")
+        stats = exporter.export_incremental(results, existing_data)
         
         # 输出统计
         logger.info("=" * 60)
         logger.info("生成完成!")
-        logger.info(f"  总任务数: {stats['total_tasks']}")
-        logger.info(f"  成功: {stats['successful_tasks']}")
-        logger.info(f"  失败: {stats['failed_tasks']}")
+        logger.info(f"  本次尝试: {stats['total_tasks']}")
+        logger.info(f"  本次成功: {stats['successful_tasks']}")
+        logger.info(f"  本次失败: {stats['failed_tasks']}")
         logger.info(f"  成功率: {stats['success_rate']*100:.1f}%")
-        logger.info(f"  总步数: {stats['total_steps']}")
-        logger.info(f"  总Token: {stats['total_tokens']}")
+        logger.info(f"  新增轨迹: {stats.get('new_traces', 0)}")
+        logger.info(f"  已有轨迹: {stats.get('existing_traces', 0)}")
+        logger.info(f"  合并总计: {stats.get('merged_total', 0)}")
         logger.info(f"  STDB文件: {config.stdb_output_path}")
         logger.info("=" * 60)
         
         print(f"\n✅ 生成完成! STDB文件: {config.stdb_output_path}")
-        print(f"   成功率: {stats['success_rate']*100:.1f}% ({stats['successful_tasks']}/{stats['total_tasks']})")
+        print(f"   本次成功: {stats['successful_tasks']}, 合并总计: {stats.get('merged_total', 0)}")
         
     except KeyboardInterrupt:
         logger.info("用户中断")

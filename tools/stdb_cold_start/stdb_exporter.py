@@ -32,6 +32,104 @@ class STDBExporter:
     def __init__(self, config: ColdStartConfig):
         self.config = config
     
+    def load_existing_data(self) -> List[Dict]:
+        """
+        加载已有的STDB冷启动数据
+        
+        Returns:
+            已有的轨迹数据列表
+        """
+        if not os.path.exists(self.config.stdb_output_path):
+            return []
+        
+        try:
+            with open(self.config.stdb_output_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            if isinstance(data, list):
+                logger.info(f"Loaded {len(data)} existing traces from {self.config.stdb_output_path}")
+                return data
+            return []
+        except Exception as e:
+            logger.warning(f"Failed to load existing data: {e}")
+            return []
+    
+    def count_by_task_type(self, data: List[Dict]) -> Dict[str, int]:
+        """
+        按任务类型统计已有数据量
+        
+        Returns:
+            Dict[task_type, count]
+        """
+        counts = {}
+        for item in data:
+            task_type = item.get("task_type", "unknown")
+            counts[task_type] = counts.get(task_type, 0) + 1
+        return counts
+    
+    def get_existing_seeds(self, data: List[Dict]) -> set:
+        """
+        获取已有数据的seed集合（用于去重）
+        """
+        return {item.get("seed") for item in data if item.get("seed")}
+    
+    def export_incremental(self, results: List[TrajectoryResult], existing_data: List[Dict]) -> Dict[str, Any]:
+        """
+        增量导出：将新生成的轨迹与已有数据合并
+        
+        Args:
+            results: 新生成的TrajectoryResult列表
+            existing_data: 已有的轨迹数据
+        
+        Returns:
+            导出统计信息
+        """
+        # 确保输出目录存在
+        os.makedirs(self.config.output_dir, exist_ok=True)
+        stdb_dir = os.path.dirname(self.config.stdb_output_path)
+        if stdb_dir:
+            os.makedirs(stdb_dir, exist_ok=True)
+        
+        # 过滤成功轨迹并转换格式
+        new_successful = [r for r in results if r.success]
+        new_data = self._to_stdb_seed_format(new_successful)
+        
+        # 合并新旧数据
+        merged_data = existing_data + new_data
+        
+        # 导出STDB seed格式
+        with open(self.config.stdb_output_path, 'w', encoding='utf-8') as f:
+            json.dump(merged_data, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"Exported {len(merged_data)} total traces ({len(new_data)} new) to {self.config.stdb_output_path}")
+        
+        # 统计
+        stats = {
+            "total_tasks": len(results),
+            "successful_tasks": len(new_successful),
+            "failed_tasks": len(results) - len(new_successful),
+            "success_rate": len(new_successful) / len(results) if results else 0,
+            "total_steps": sum(r.steps for r in results),
+            "total_tokens": sum(r.total_tokens for r in results),
+            "new_traces": len(new_data),
+            "existing_traces": len(existing_data),
+            "merged_total": len(merged_data)
+        }
+        
+        # 导出完整轨迹详情
+        if self.config.save_full_trajectories:
+            full_data = self._to_full_format(results, stats)
+            full_path = os.path.join(self.config.output_dir, "trajectories_full.json")
+            with open(full_path, 'w', encoding='utf-8') as f:
+                json.dump(full_data, f, indent=2, ensure_ascii=False)
+            logger.info(f"Exported full trajectories to {full_path}")
+        
+        # 导出统计摘要
+        summary_path = os.path.join(self.config.output_dir, "generation_summary.json")
+        self._export_summary(results, stats, summary_path)
+        
+        return stats
+    
     def export(self, results: List[TrajectoryResult]) -> Dict[str, Any]:
         """
         导出轨迹结果
