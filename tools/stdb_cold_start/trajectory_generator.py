@@ -70,41 +70,10 @@ class SingleEnvRunner:
         # 加载ALFWorld配置
         config_path = os.path.expanduser(self.config.alfworld_config)
         if not os.path.exists(config_path):
-            logger.warning(f"ALFWorld config not found at {config_path}")
-            # 尝试在当前目录查找或生成默认配置
-            base_config_content = """
-env:
-  type: 'AlfredTWEnv'
-  regen_game_files: False
-  domain_file: null
-  hybrid:
-    start_eps: 1.0
-    end_eps: 1.0
-    decay_eps: 100
-  eval:
-    report_freq: 50
-  expert:
-    expert_type: 'handcoded'
-  thor:
-    screen_width: 300
-    screen_height: 300
-controller:
-  type: 'oracle'
-  load_receps: True
-  debug: False
-general:
-  random_seed: 42
-  train:
-    max_steps: 50
-  eval:
-    max_steps: 50
-"""
-            temp_config = "base_config.yaml"
-            if not os.path.exists(temp_config):
-                logger.info(f"Generating default base_config.yaml in current directory")
-                with open(temp_config, 'w') as f:
-                    f.write(base_config_content.strip())
-            config_path = temp_config
+            if os.path.exists("base_config.yaml"):
+                config_path = "base_config.yaml"
+            else:
+                raise FileNotFoundError(f"Configuration file not found at {config_path} or base_config.yaml")
         
         with open(config_path, 'r') as f:
             alf_config = yaml.safe_load(f)
@@ -252,6 +221,118 @@ class TrajectoryGenerator:
         self._results = []
         self._progress = {"completed": 0, "success": 0, "failed": 0}
     
+    def _ensure_alfworld_config(self):
+        """Ensure ALFWorld configuration exists and is valid"""
+        config_path = os.path.expanduser(self.config.alfworld_config)
+        
+        # Check if the target config file already exists
+        if os.path.exists(config_path):
+            logger.info(f"Using existing ALFWorld config at {config_path}")
+            return
+
+        logger.warning(f"ALFWorld config not found at {config_path}")
+        
+        # Try to find the canonical config within the project structure
+        # We start searching from the directory where this script is located (tools/stdb_cold_start)
+        # and go up to the project root.
+        current_file = Path(__file__).resolve()
+        project_root = current_file.parent.parent.parent
+        canonical_config_path = project_root / "agent_system/environments/env_package/alfworld/configs/config_tw.yaml"
+        
+        if canonical_config_path.exists():
+            logger.info(f"Found canonical ALFWorld config at {canonical_config_path}")
+            try:
+                import shutil
+                os.makedirs(os.path.dirname(config_path), exist_ok=True)
+                shutil.copy2(canonical_config_path, config_path)
+                logger.info(f"Copied canonical config to {config_path}")
+                return
+            except Exception as e:
+                logger.error(f"Failed to copy canonical config: {e}")
+        else:
+            logger.warning(f"Canonical ALFWorld config not found at {canonical_config_path}")
+
+        # Fallback: Default configuration content (if canonical file is missing)
+        base_config_content = """dataset:
+  data_path: '$ALFWORLD_DATA/json_2.1.1/train'
+  eval_id_data_path: '$ALFWORLD_DATA/json_2.1.1/valid_seen'
+  eval_ood_data_path: '$ALFWORLD_DATA/json_2.1.1/valid_unseen'
+  num_train_games: -1
+  num_eval_games: -1
+
+logic:
+  domain: '$ALFWORLD_DATA/logic/alfred.pddl'
+  grammar: '$ALFWORLD_DATA/logic/alfred.twl2'
+
+env:
+  type: 'AlfredTWEnv'
+  regen_game_files: False
+  domain_file: null
+  domain_randomization: False
+  task_types: [1, 2, 3, 4, 5, 6]
+  expert_timeout_steps: 150
+  expert_type: "handcoded"
+  goal_desc_human_anns_prob: 0.0
+  hybrid:
+    start_eps: 1.0
+    end_eps: 1.0
+    decay_eps: 100
+    thor_prob: 0.5
+    eval_mode: "tw"
+  eval:
+    report_freq: 50
+  expert:
+    expert_type: 'handcoded'
+  thor:
+    screen_width: 300
+    screen_height: 300
+    smooth_nav: False
+    save_frames_to_disk: False
+    save_frames_path: './videos/'
+
+controller:
+  type: 'oracle'
+  load_receps: True
+  debug: False
+
+general:
+  random_seed: 42
+  train:
+    max_steps: 50
+  eval:
+    max_steps: 50
+  training_method: 'dagger'
+  observation_pool_capacity: 3
+
+rl:
+  training:
+    max_nb_steps_per_episode: 50
+    learn_start_from_this_episode: 0
+    target_net_update_frequency: 500
+  action_space: "admissible"
+  beam_width: 10
+  
+dagger:
+  training:
+     max_nb_steps_per_episode: 50
+  action_space: "generation"
+  beam_width: 10
+"""
+        # Try writing default content to the configured path
+        try:
+            os.makedirs(os.path.dirname(config_path), exist_ok=True)
+            with open(config_path, 'w') as f:
+                f.write(base_config_content.strip())
+            logger.info(f"Generated default base_config.yaml at {config_path}")
+        except Exception as e:
+            logger.error(f"Failed to generate config at {config_path}: {e}")
+            # Fallback for current directory
+            local_config = "base_config.yaml"
+            if not os.path.exists(local_config):
+                logger.info(f"Generating fallback {local_config} in current directory")
+                with open(local_config, 'w') as f:
+                    f.write(base_config_content.strip())
+
     def generate_all(
         self,
         tasks: List[TaskInfo],
@@ -267,6 +348,8 @@ class TrajectoryGenerator:
         Returns:
             TrajectoryResult列表
         """
+        self._ensure_alfworld_config()
+        
         results = []
         total = len(tasks)
         
