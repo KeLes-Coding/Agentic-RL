@@ -139,4 +139,7 @@ stdb/
 logger*/
 local_logger*/
 .stdb*/
+stdb_0*/
+config.yaml
 training_metrics/
+stdb_cold_start_output/

@@ -80,7 +80,7 @@ def main():
     )
     
     # 配置文件
-    parser.add_argument("--config", type=str, help="YAML配置文件路径")
+    parser.add_argument("--config", type=str, help="YAML配置文件路径", default="tools/stdb_cold_start/config.yaml")
     
     # LLM配置
     parser.add_argument("--api-base", type=str, default="https://api.deepseek.com/v1",
@@ -101,7 +101,7 @@ def main():
                        help="每个任务最大重试次数 (default: 5)")
     
     # 并发配置
-    parser.add_argument("--workers", type=int, default=4,
+    parser.add_argument("--workers", type=int, default=6,
                        help="并发worker数量 (default: 4)")
     
     # 输出配置
