@@ -8,7 +8,8 @@ import asyncio
 import logging
 import threading
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Callable, Any
 from pathlib import Path
@@ -253,6 +254,43 @@ class SingleEnvRunner:
         return '\n'.join(lines[:2]) if lines else observation
 
 
+def process_worker_entry(config: ColdStartConfig, task: TaskInfo) -> TrajectoryResult:
+    """
+    Multiprocessing Worker Entry Point
+    
+    Args:
+        config: Configuration object
+        task: Task information
+        
+    Returns:
+        TrajectoryResult
+    """
+    # Create a runner instance within the worker process
+    runner = SingleEnvRunner(config)
+    
+    # Retry logic
+    max_retries = config.max_retries_per_task
+    last_result = None
+    
+    for retry in range(max_retries):
+        result = runner.run_episode(task)
+        result.retries = retry
+        last_result = result
+        
+        if result.success:
+            return result
+        
+        if result.error and "rate limit" in str(result.error).lower():
+            # API rate limit, wait and retry
+            import time
+            time.sleep(2 ** retry)  # Exponential backoff
+        elif retry < max_retries - 1:
+            # We can't log to the main process logger easily, maybe just print or ignore
+            pass
+    
+    return last_result
+
+
 class TrajectoryGenerator:
     """并发轨迹生成器"""
     
@@ -393,15 +431,16 @@ dagger:
         results = []
         total = len(tasks)
         
-        logger.info(f"Starting trajectory generation for {total} tasks with {self.max_workers} workers")
+        # Use ProcessPoolExecutor for true parallelism and to avoid TextWorld thread-safety issues
+        logger.info(f"Starting trajectory generation for {total} tasks with {self.max_workers} processes")
         
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
             # 提交所有任务
             future_to_task = {}
             for task in tasks:
-                # 每个worker需要独立的环境和LLM客户端
-                runner = SingleEnvRunner(self.config)
-                future = executor.submit(self._run_with_retry, runner, task)
+                # Pass config and task to the worker function
+                # The worker function will instantiate its own SingleEnvRunner
+                future = executor.submit(process_worker_entry, self.config, task)
                 future_to_task[future] = task
             
             # 收集结果
@@ -423,7 +462,8 @@ dagger:
                     
                     # 日志
                     status = "✓" if result.success else "✗"
-                    logger.info(f"[{len(results)}/{total}] Task {task.task_id} ({task.task_type}): {status} ({result.steps} steps)")
+                    error_msg = f" Error: {result.error}" if result.error else ""
+                    logger.info(f"[{len(results)}/{total}] Task {task.task_id} ({task.task_type}): {status} ({result.steps} steps){error_msg}")
                     
                 except Exception as e:
                     logger.error(f"Task {task.task_id} failed with exception: {e}")
@@ -438,25 +478,3 @@ dagger:
         logger.info(f"Generation complete: {success_count}/{total} successful ({100*success_count/total:.1f}%)")
         
         return results
-    
-    def _run_with_retry(self, runner: SingleEnvRunner, task: TaskInfo) -> TrajectoryResult:
-        """带重试的运行"""
-        max_retries = self.config.max_retries_per_task
-        last_result = None
-        
-        for retry in range(max_retries):
-            result = runner.run_episode(task)
-            result.retries = retry
-            last_result = result
-            
-            if result.success:
-                return result
-            
-            if result.error and "rate limit" in result.error.lower():
-                # API限流，等待后重试
-                import time
-                time.sleep(2 ** retry)  # 指数退避
-            elif retry < max_retries - 1:
-                logger.debug(f"Task {task.task_id} retry {retry + 1}/{max_retries}")
-        
-        return last_result
