@@ -68,7 +68,45 @@ class SingleEnvRunner:
         from agent_system.environments.env_package.alfworld.alfworld.agents.environment import get_environment
         
         # 加载ALFWorld配置
-        with open(self.config.alfworld_config, 'r') as f:
+        config_path = os.path.expanduser(self.config.alfworld_config)
+        if not os.path.exists(config_path):
+            logger.warning(f"ALFWorld config not found at {config_path}")
+            # 尝试在当前目录查找或生成默认配置
+            base_config_content = """
+env:
+  type: 'AlfredTWEnv'
+  regen_game_files: False
+  domain_file: null
+  hybrid:
+    start_eps: 1.0
+    end_eps: 1.0
+    decay_eps: 100
+  eval:
+    report_freq: 50
+  expert:
+    expert_type: 'handcoded'
+  thor:
+    screen_width: 300
+    screen_height: 300
+controller:
+  type: 'oracle'
+  load_receps: True
+  debug: False
+general:
+  random_seed: 42
+  train:
+    max_steps: 50
+  eval:
+    max_steps: 50
+"""
+            temp_config = "base_config.yaml"
+            if not os.path.exists(temp_config):
+                logger.info(f"Generating default base_config.yaml in current directory")
+                with open(temp_config, 'w') as f:
+                    f.write(base_config_content.strip())
+            config_path = temp_config
+        
+        with open(config_path, 'r') as f:
             alf_config = yaml.safe_load(f)
         
         # 设置max_steps
