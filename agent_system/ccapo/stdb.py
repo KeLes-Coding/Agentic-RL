@@ -280,3 +280,99 @@ class STDB:
             
         except Exception as e:
             print(f"[STDB] Error loading: {e}")
+
+    def merge_from_json(self, json_path: str, overwrite: bool = False) -> int:
+        """
+        将外部JSON文件中的轨迹数据叠加合并到当前STDB。
+        
+        支持两种格式：
+        1. Seed格式 (list): 与seed_from_json相同的格式
+        2. 完整STDB格式 (dict with layers): 合并layer数据
+        
+        Args:
+            json_path: 外部STDB seed文件路径
+            overwrite: 如果为True，相同边的统计信息会被覆盖；
+                       如果为False（默认），统计信息会累加
+        
+        Returns:
+            合并的轨迹/边数量
+        """
+        import json
+        import os
+        
+        if not os.path.exists(json_path):
+            print(f"[STDB] Merge file not found: {json_path}")
+            return 0
+        
+        try:
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+            
+            merged_count = 0
+            
+            # 格式1: Seed格式 (list) - 调用已有的update逻辑
+            if isinstance(data, list):
+                for item in data:
+                    trace_raw = item.get("trace", [])
+                    outcome = item.get("outcome", False)
+                    if outcome and trace_raw:
+                        context = {
+                            "task_type": item.get("task_type", "default_task"),
+                            "seed": str(item.get("seed", "default_seed"))
+                        }
+                        # 应用fingerprint转换
+                        trace_fp = [fingerprint_alfworld(a) for a in trace_raw]
+                        self.update(trace_fp, outcome, context)
+                        merged_count += 1
+            
+            # 格式2: 完整STDB格式 (dict with layers)
+            elif isinstance(data, dict) and ("layer_specific" in data or "layer_general" in data):
+                merged_count = self._merge_stdb_layers(data, overwrite)
+            
+            print(f"[STDB] Merged {merged_count} traces/edges from {json_path}")
+            return merged_count
+            
+        except Exception as e:
+            print(f"[STDB] Error merging from {json_path}: {e}")
+            return 0
+
+    def _merge_stdb_layers(self, data: dict, overwrite: bool) -> int:
+        """合并完整STDB格式的层数据"""
+        count = 0
+        
+        # 合并stats (仅success/fail计数)
+        if "stats" in data:
+            src_stats = data["stats"]
+            if overwrite:
+                self.stats["total_success"] = src_stats.get("total_success", 0.0)
+                self.stats["total_fail"] = src_stats.get("total_fail", 0.0)
+            else:
+                self.stats["total_success"] += src_stats.get("total_success", 0.0)
+                self.stats["total_fail"] += src_stats.get("total_fail", 0.0)
+        
+        # 合并layer_specific
+        for ctx_key, u_dict in data.get("layer_specific", {}).items():
+            for u, v_dict in u_dict.items():
+                for v, edge_stats in v_dict.items():
+                    self._merge_edge(self.layer_specific[ctx_key], u, v, edge_stats, overwrite)
+                    count += 1
+        
+        # 合并layer_general
+        for task_type, u_dict in data.get("layer_general", {}).items():
+            for u, v_dict in u_dict.items():
+                for v, edge_stats in v_dict.items():
+                    self._merge_edge(self.layer_general[task_type], u, v, edge_stats, overwrite)
+        
+        return count
+
+    def _merge_edge(self, graph, u: str, v: str, new_stats: dict, overwrite: bool):
+        """合并单条边的统计信息"""
+        edge = graph[u][v]
+        if overwrite:
+            edge["success_cnt"] = new_stats.get("success_cnt", 0.0)
+            edge["total_dist"] = new_stats.get("total_dist", 0.0)
+            edge["dist_samples"] = new_stats.get("dist_samples", 0)
+        else:
+            edge["success_cnt"] += new_stats.get("success_cnt", 0.0)
+            edge["total_dist"] += new_stats.get("total_dist", 0.0)
+            edge["dist_samples"] += new_stats.get("dist_samples", 0)

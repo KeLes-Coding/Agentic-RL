@@ -1,0 +1,49 @@
+# STDB Cold Start 配置模板
+# 复制此文件为 config.yaml 并根据需要修改
+
+# ============ LLM配置 ============
+# DeepSeek API (OpenAI SDK兼容)
+api_base: "https://api.deepseek.com/v1"
+model_name: "deepseek-chat"  # 或 "deepseek-reasoner"
+# api_key: "sk-xxx"  # 建议通过环境变量 DEEPSEEK_API_KEY 设置
+temperature: 0.7
+max_tokens: 1024
+request_timeout: 60  # 请求超时(秒)
+
+# ============ 数据源配置 ============
+# 数据来源模式: "parquet" | "generate" | "scan"
+# - parquet: 从现有parquet文件读取（推荐，与训练数据一致）
+# - generate: 调用make_real_alfworld_data.py生成数据
+# - scan: 直接扫描ALFWORLD目录
+data_source_mode: "parquet"
+parquet_path: "data/verl-agent/text/train.parquet"  # parquet模式的数据文件路径
+generate_output_dir: "data/verl-agent/text"  # generate模式的输出目录
+
+# ============ 任务配置 ============
+# ALFWORLD 6种任务类型
+task_types:
+  - "pick_and_place_simple"
+  - "pick_clean_then_place_in_recep"
+  - "pick_heat_then_place_in_recep"
+  - "pick_cool_then_place_in_recep"
+  - "look_at_obj_in_light"
+  - "pick_two_obj_and_place"
+
+samples_per_type: 20  # 每种类型抽取数量 (共120条)
+max_retries_per_task: 5  # 每个任务最大重试次数
+
+# ============ 环境配置 ============
+max_steps: 50  # 每个episode最大步数
+alfworld_config: "~/.cache/alfworld/base_config.yaml"
+alfworld_data_root: "~/.cache/alfworld/json_2.1.1"
+
+# ============ 并发配置 ============
+max_concurrent_workers: 4  # 并发worker数量，根据API限流调整
+
+# ============ 输出配置 ============
+output_dir: "stdb_cold_start_output"  # 完整轨迹文件目录
+stdb_output_path: "stdb/alfworld_cold_start.json"  # STDB seed文件路径
+save_full_trajectories: true  # 是否保存完整轨迹详情
+
+# ============ 随机种子 ============
+seed: 42

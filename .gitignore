@@ -138,5 +138,5 @@ stdb/
 .claude/
 logger*/
 local_logger*/
-stdb*/
+.stdb*/
 training_metrics/
