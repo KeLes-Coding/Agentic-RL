@@ -114,7 +114,19 @@ class SingleEnvRunner:
             self.env.game_files = [task_info.game_path + "/game.tw-pddl"]
             obs, infos = self.env.reset()
             
-            observation = obs[0] if isinstance(obs, list) else obs
+            # Debug logging
+            # logger.info(f"DEBUG: Task {task_info.task_id} reset obs type: {type(obs)}, content: {obs}")
+            
+            if isinstance(obs, (list, tuple)):
+                observation = obs[0]
+            else:
+                observation = obs
+                
+            # Double check if observation is still a tuple (nested)
+            if isinstance(observation, (list, tuple)):
+                 # logger.info(f"DEBUG: Task {task_info.task_id} nested observation type: {type(observation)}, content: {observation}")
+                 observation = observation[0]
+
             admissible_actions = infos.get('admissible_commands', [[]])[0]
             if isinstance(admissible_actions, list) and len(admissible_actions) > 0:
                 if isinstance(admissible_actions[0], list):
@@ -166,7 +178,15 @@ class SingleEnvRunner:
                 # 执行动作
                 obs, scores, dones, infos = self.env.step([action_parsed])
                 
-                observation = obs[0] if isinstance(obs, list) else obs
+                if isinstance(obs, (list, tuple)):
+                    observation = obs[0]
+                else:
+                    observation = obs
+
+                # Double check if observation is still a tuple (nested)
+                if isinstance(observation, (list, tuple)):
+                    observation = observation[0]
+                
                 done = dones[0] if isinstance(dones, list) else dones
                 info = infos if isinstance(infos, dict) else {}
                 
@@ -195,13 +215,18 @@ class SingleEnvRunner:
             result.total_tokens = total_tokens
             
         except Exception as e:
-            logger.error(f"Error in episode {task_info.task_id}: {e}")
+            import traceback
+            logger.error(f"Error in episode {task_info.task_id}: {e}\n{traceback.format_exc()}")
             result.error = str(e)
         
         return result
     
     def _extract_task_description(self, observation: str) -> str:
         """从初始观测中提取任务描述"""
+        if not isinstance(observation, str):
+            logger.warning(f"Observation is not a string: {type(observation)} {observation}")
+            observation = str(observation)
+
         # ALFWorld的任务描述通常在观测的开头
         lines = observation.strip().split('\n')
         for line in lines:
