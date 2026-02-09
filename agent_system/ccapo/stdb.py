@@ -212,7 +212,8 @@ class STDB:
         # Let's clean up logic. If I is very small, log is negative.
         # "Strictly normalized to [0, 1]" -> Sigmoid guarantees this.
         
-        argument = I_E * (1.0 + C_E) * D_E
+        # argument = I_E * (1.0 + C_E) * D_E
+        argument = I_E * (1.0 + C_E)
         
         # Prevent log(0)
         argument = max(argument, self.config.epsilon)

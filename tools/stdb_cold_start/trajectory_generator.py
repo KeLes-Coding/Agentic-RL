@@ -59,7 +59,7 @@ class SingleEnvRunner:
         self.env = None
         self.llm_client = None
     
-    def _init_env(self):
+    def _init_env(self, task_info: Optional[TaskInfo] = None):
         """延迟初始化环境（在worker线程中）"""
         if self.env is not None:
             return
@@ -83,6 +83,15 @@ class SingleEnvRunner:
         if 'rl' in alf_config and 'training' in alf_config['rl']:
             alf_config['rl']['training']['max_nb_steps_per_episode'] = self.config.max_steps
         
+        # CRITICAL FIX: Override data_path to only load the specific task
+        # AlfredTWEnv loads all games in data_path. We want only ONE specific game.
+        if task_info:
+            logger.info(f"Setting Env data_path to {task_info.game_path} for task {task_info.task_id}")
+            alf_config['dataset']['data_path'] = task_info.game_path
+            # Also ensure num_games is set to cover this single game
+            alf_config['dataset']['num_train_games'] = 1
+            alf_config['dataset']['num_eval_games'] = 1
+        
         env_type = alf_config['env']['type']
         base_env = get_environment(env_type)(alf_config, train_eval='train')
         self.env = base_env.init_env(batch_size=1)
@@ -104,7 +113,7 @@ class SingleEnvRunner:
             TrajectoryResult
         """
         # 初始化
-        self._init_env()
+        self._init_env(task_info)
         self._init_llm()
         
         result = TrajectoryResult(task_info=task_info, success=False)

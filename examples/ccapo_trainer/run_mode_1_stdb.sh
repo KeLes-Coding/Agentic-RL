@@ -99,6 +99,7 @@ python3 -m verl.trainer.main_ppo \
     ++algorithm.ccapo.beta_micro=0.0 \
     ++algorithm.ccapo.enable_update_then_evaluate=true \
     ++algorithm.ccapo.stdb_save_path="stdb/alfworld_stdb.json" \
+    ++algorithm.ccapo.stdb.seed_path="stdb_cold_start_output/alfworld_cold_start.json" \
     ++algorithm.ccapo.lasr.enable=false \
     env.env_name=alfworld/AlfredTWEnv \
     env.seed=42 \
