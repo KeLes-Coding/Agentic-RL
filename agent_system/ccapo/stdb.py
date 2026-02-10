@@ -5,36 +5,48 @@ from .config import STDBConfig
 from .diagnostics import get_diagnostics
 from .fingerprint import fingerprint_alfworld
 
+
+def _default_edge():
+    """v4.1 edge stats: success_cnt + total_cnt + distance info."""
+    return {
+        "success_cnt": 0.0,
+        "total_cnt": 0.0,      # v4.1: tracks ALL traversals (success + fail)
+        "total_dist": 0.0,
+        "dist_samples": 0
+    }
+
+
 class STDB:
     """
-    Spatio-Temporal Database (STDB) for CCAPO v3.0.
+    Spatio-Temporal Database (STDB) for CCAPO v4.1.
     Maintains a probabilistic logic graph with Specific/General layers.
-    Truth Source: Only Successful trajectories update the topology.
+    
+    v4.1 Changes:
+    - Edge stats include total_cnt (updated on ALL trajectories, not just success)
+    - I(E) changed to conditional success rate with Bayesian smoothing
+    - C(E) uses real P(S|E) instead of implicit 1.0
+    - D(E) factor restored in scoring formula
+    - New query_anchor_value() for V̄(S_anchor) computation
     """
     def __init__(self, config: STDBConfig):
         self.config = config
         
         # Layer Specific (Prompt-Level / Seed-Level)
         # Key: (context_key) -> u -> v -> EdgeStats
-        # context_key = f"{task_type}_{seed}" usually
-        self.layer_specific: Dict[str, Dict[str, Dict[str, Dict]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: {
-            "success_cnt": 0.0,
-            "total_dist": 0.0,
-            "dist_samples": 0
-        })))
+        self.layer_specific: Dict[str, Dict[str, Dict[str, Dict]]] = defaultdict(
+            lambda: defaultdict(lambda: defaultdict(_default_edge))
+        )
         
         # Layer General (App-Level / Task-Level)
         # Key: task_type -> u -> v -> EdgeStats
-        self.layer_general: Dict[str, Dict[str, Dict[str, Dict]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: {
-            "success_cnt": 0.0,
-            "total_dist": 0.0,
-            "dist_samples": 0
-        })))
+        self.layer_general: Dict[str, Dict[str, Dict[str, Dict]]] = defaultdict(
+            lambda: defaultdict(lambda: defaultdict(_default_edge))
+        )
         
         # Global Counters
         self.stats = {
             "total_success": 0.0,
-            "total_fail": 0.0 # Tracked only for P(Success) calc
+            "total_fail": 0.0
         }
 
     def seed_from_json(self, json_path: str):
@@ -61,14 +73,8 @@ class STDB:
                     "seed": str(item.get("seed", "default_seed"))
                 }
                 
-                # [FIX] Apply fingerprinting to ensure seed data matches runtime queries
                 if outcome: 
-                    # Only seed successes per v3.0 philosophy
                     trace_fp = [fingerprint_alfworld(a) for a in trace_raw]
-                    
-                    # Optional: Basic loop filtering for seed data could be added here,
-                    # but we assume seed data (demonstrations) are relatively clean.
-                    
                     self.update(trace_fp, outcome, context)
                     count += 1
                 
@@ -79,8 +85,11 @@ class STDB:
 
     def update(self, trace: List[str], outcome: bool, context: Dict[str, str] = None):
         """
-        Update the graph. 
-        CCAPO v3.0 Rule: Only Successful trajectories update the graph topology.
+        Update the graph.
+        
+        CCAPO v4.1 Rule:
+        - ALL trajectories update total_cnt (for conditional success rate)
+        - Only SUCCESS trajectories update success_cnt and distance info
         """
         if not trace:
             return
@@ -93,32 +102,31 @@ class STDB:
             self.stats["total_success"] += 1.0
         else:
             self.stats["total_fail"] += 1.0
-            return # Failure -> No graph update (Direct Query mode)
 
-        # Update Logic (Success Only)
         specific_key = f"{task_type}_{seed}"
-        
-        # Calculate distances to goal for each step
-        # trace: [a1, a2, ..., aT]
-        # edge: a_i -> a_{i+1}
-        # v = a_{i+1}
-        # Distance from v to end (aT) is T - (i+1).
-        # if v is aT (last step), distance is 0.
-        
         T = len(trace)
         
         for i in range(T - 1):
             u = trace[i]
             v = trace[i+1]
-            dist_to_goal = T - 1 - (i + 1)
             
-            # Update Specific Layer
-            self._update_edge(self.layer_specific[specific_key], u, v, dist_to_goal)
+            # v4.1: ALWAYS update total_cnt
+            self._update_edge_total(self.layer_specific[specific_key], u, v)
+            self._update_edge_total(self.layer_general[task_type], u, v)
             
-            # Update General Layer
-            self._update_edge(self.layer_general[task_type], u, v, dist_to_goal)
+            if outcome:
+                # Only success: update success_cnt and distance
+                dist_to_goal = T - 1 - (i + 1)
+                self._update_edge_success(self.layer_specific[specific_key], u, v, dist_to_goal)
+                self._update_edge_success(self.layer_general[task_type], u, v, dist_to_goal)
 
-    def _update_edge(self, graph, u, v, dist):
+    def _update_edge_total(self, graph, u, v):
+        """v4.1: Update only total_cnt (called for ALL trajectories)."""
+        edge = graph[u][v]
+        edge["total_cnt"] += 1.0
+
+    def _update_edge_success(self, graph, u, v, dist):
+        """Update success-specific stats (called only for successful trajectories)."""
         edge = graph[u][v]
         edge["success_cnt"] += 1.0
         edge["total_dist"] += dist
@@ -127,8 +135,9 @@ class STDB:
     def query(self, trace: List[str], context: Dict[str, str] = None, log_diagnostics: bool = True) -> Tuple[List[float], List[Dict]]:
         """
         Cascading Query for micro-rewards.
+        Returns Q_STDB scores for each transition in the trace.
         """
-        rewards = [0.0] # First step usually 0 or neutral
+        rewards = [0.0]  # First step: no predecessor edge
         edge_details = []
         
         task_type = context.get("task_type", "default_task") if context else "default_task"
@@ -175,48 +184,85 @@ class STDB:
                 
         return rewards, edge_details
 
+    def query_anchor_value(self, anchor_node: str, context: Dict[str, str] = None) -> float:
+        """
+        Compute V̄(S_anchor): the weighted average Q_STDB of all edges
+        departing from anchor_node. This represents the "historical experience expectation".
+        
+        v4.1: Used to compute A_micro = Q(s,a) - V̄(S_anchor).
+        
+        Returns 0.0 if anchor_node has no outgoing edges (new state → no guidance).
+        """
+        task_type = context.get("task_type", "default_task") if context else "default_task"
+        seed = context.get("seed", "default_seed") if context else "default_seed"
+        specific_key = f"{task_type}_{seed}"
+        
+        # Try specific layer first, fall back to general
+        out_edges = {}
+        g_specific = self.layer_specific.get(specific_key, {})
+        if anchor_node in g_specific:
+            out_edges = g_specific[anchor_node]
+        else:
+            g_general = self.layer_general.get(task_type, {})
+            if anchor_node in g_general:
+                out_edges = g_general[anchor_node]
+        
+        if not out_edges:
+            return 0.0
+        
+        # Weighted average: weight by total_cnt (how often each edge was traversed)
+        total_weight = 0.0
+        weighted_sum = 0.0
+        
+        for v, edge in out_edges.items():
+            w = edge.get("total_cnt", 0.0)
+            if w <= 0:
+                continue
+            score, _ = self._calculate_score(edge)
+            weighted_sum += w * score
+            total_weight += w
+        
+        if total_weight <= 0:
+            return 0.0
+        
+        return weighted_sum / total_weight
+
     def _calculate_score(self, edge: Dict) -> Tuple[float, Dict]:
         """
-        Calculate Q_STDB(E) = Sigmoid( log( I * (1 + C) * D ) )
+        Calculate Q_STDB(E) = Sigmoid( log( I * (1 + λ·C) * D ) )
         
-        Simplified v3.0:
-        Since we only update on success, P(Succ|E) is implicitly 1.0 for known edges.
-        So C(E) becomes constant or related to global P(Succ).
-        C(E) = P(S|E) / P(S_global) = 1.0 / P(S_global).
-        
-        I(E) = N_succ(E) / N_succ_total
-        D(E) = 1 / (d_goal + 1)^alpha
+        v4.1 Changes:
+        - I(E) = (N_succ + α) / (N_total + 2α)  (conditional success rate + Bayesian smoothing)
+        - C(E) = P(S|E) / P(S_global)            (real conditional, not implicit 1.0)
+        - D(E) = 1 / (d_goal + 1)^α_dist         (restored in formula)
         """
         N_succ_E = edge["success_cnt"]
-        N_succ_total = self.stats["total_success"] + self.config.epsilon
+        N_total_E = edge.get("total_cnt", N_succ_E)  # backward compat
+        alpha = self.config.bayesian_alpha
+        eps = self.config.epsilon
         
-        # Importance
-        I_E = N_succ_E / N_succ_total
+        # Importance: Conditional success rate with Bayesian smoothing
+        I_E = (N_succ_E + alpha) / (N_total_E + 2 * alpha)
         
-        # Criticality
-        total_episodes = self.stats["total_success"] + self.stats["total_fail"] + self.config.epsilon
-        P_S_global = (self.stats["total_success"] + self.config.epsilon) / total_episodes
-        # P(S|E) approx 1.0 for existing edges
-        C_E = 1.0 / P_S_global
+        # Criticality: P(S|E) / P(S_global)
+        P_S_given_E = N_succ_E / (N_total_E + eps) if N_total_E > 0 else 0.5
+        total_episodes = self.stats["total_success"] + self.stats["total_fail"] + eps
+        P_S_global = (self.stats["total_success"] + eps) / total_episodes
+        C_E = P_S_given_E / P_S_global
         
         # Distance
-        avg_dist = edge["total_dist"] / (edge["dist_samples"] + self.config.epsilon)
+        if edge["dist_samples"] > 0:
+            avg_dist = edge["total_dist"] / edge["dist_samples"]
+        else:
+            avg_dist = 5.0  # default moderate distance for edges with no success distance info
         D_E = 1.0 / ((avg_dist + 1.0) ** self.config.alpha_dist)
         
-        # Argument for Log
-        # Q = I * (1 + C) * D
-        # Note: I is usually small (<1). 1+C is >1. D < 1.
-        # Check for numeric stability
-        
-        # v3.0 Formula: Sigmoid( log ( ... ) )
-        # Let's clean up logic. If I is very small, log is negative.
-        # "Strictly normalized to [0, 1]" -> Sigmoid guarantees this.
-        
-        # argument = I_E * (1.0 + C_E) * D_E
-        argument = I_E * (1.0 + C_E)
+        # v4.1: Full formula with D factor
+        lambda_crit = self.config.lambda_crit
+        argument = I_E * (1.0 + lambda_crit * C_E) * D_E
         
         # Prevent log(0)
-        argument = max(argument, self.config.epsilon)
+        argument = max(argument, eps)
         
         log_val = math.log(argument)
         
@@ -227,9 +273,12 @@ class STDB:
             "I": I_E,
             "C": C_E,
             "D": D_E,
+            "lambda_crit": lambda_crit,
             "arg": argument,
             "log_val": log_val,
-            "raw_score": score
+            "raw_score": score,
+            "N_succ": N_succ_E,
+            "N_total": N_total_E,
         }
         
         return score, details
@@ -245,7 +294,7 @@ class STDB:
             return d
 
         data = {
-            "version": "3.0",
+            "version": "4.1",
             "stats": self.stats,
             "layer_specific": recursive_dict(self.layer_specific),
             "layer_general": recursive_dict(self.layer_general)
@@ -267,17 +316,23 @@ class STDB:
                 data = json.load(f)
             
             self.stats = data.get("stats", self.stats)
+            version = data.get("version", "3.0")
             
-            # Restore Layers
-            # Helper to restore into defaultdict
-            def restore_layer(target, source):
+            def restore_layer(target, source, needs_total_cnt_backfill):
                 for k1, v1 in source.items():
                     for k2, v2 in v1.items():
                         for k3, v3 in v2.items():
+                            # v3.0 backward compat: if total_cnt missing, default to success_cnt
+                            if needs_total_cnt_backfill and "total_cnt" not in v3:
+                                v3["total_cnt"] = v3.get("success_cnt", 0.0)
                             target[k1][k2][k3] = v3
             
-            restore_layer(self.layer_specific, data.get("layer_specific", {}))
-            restore_layer(self.layer_general, data.get("layer_general", {}))
+            needs_backfill = version < "4.1"
+            restore_layer(self.layer_specific, data.get("layer_specific", {}), needs_backfill)
+            restore_layer(self.layer_general, data.get("layer_general", {}), needs_backfill)
+            
+            print(f"[STDB] Loaded v{version} data from {path}" + 
+                  (" (backfilled total_cnt)" if needs_backfill else ""))
             
         except Exception as e:
             print(f"[STDB] Error loading: {e}")
@@ -289,14 +344,6 @@ class STDB:
         支持两种格式：
         1. Seed格式 (list): 与seed_from_json相同的格式
         2. 完整STDB格式 (dict with layers): 合并layer数据
-        
-        Args:
-            json_path: 外部STDB seed文件路径
-            overwrite: 如果为True，相同边的统计信息会被覆盖；
-                       如果为False（默认），统计信息会累加
-        
-        Returns:
-            合并的轨迹/边数量
         """
         import json
         import os
@@ -311,22 +358,21 @@ class STDB:
             
             merged_count = 0
             
-            # 格式1: Seed格式 (list) - 调用已有的update逻辑
+            # Format 1: Seed format (list)
             if isinstance(data, list):
                 for item in data:
                     trace_raw = item.get("trace", [])
                     outcome = item.get("outcome", False)
-                    if outcome and trace_raw:
+                    if trace_raw:
                         context = {
                             "task_type": item.get("task_type", "default_task"),
                             "seed": str(item.get("seed", "default_seed"))
                         }
-                        # 应用fingerprint转换
                         trace_fp = [fingerprint_alfworld(a) for a in trace_raw]
                         self.update(trace_fp, outcome, context)
                         merged_count += 1
             
-            # 格式2: 完整STDB格式 (dict with layers)
+            # Format 2: Full STDB format (dict with layers)
             elif isinstance(data, dict) and ("layer_specific" in data or "layer_general" in data):
                 merged_count = self._merge_stdb_layers(data, overwrite)
             
@@ -341,7 +387,6 @@ class STDB:
         """合并完整STDB格式的层数据"""
         count = 0
         
-        # 合并stats (仅success/fail计数)
         if "stats" in data:
             src_stats = data["stats"]
             if overwrite:
@@ -351,14 +396,12 @@ class STDB:
                 self.stats["total_success"] += src_stats.get("total_success", 0.0)
                 self.stats["total_fail"] += src_stats.get("total_fail", 0.0)
         
-        # 合并layer_specific
         for ctx_key, u_dict in data.get("layer_specific", {}).items():
             for u, v_dict in u_dict.items():
                 for v, edge_stats in v_dict.items():
                     self._merge_edge(self.layer_specific[ctx_key], u, v, edge_stats, overwrite)
                     count += 1
         
-        # 合并layer_general
         for task_type, u_dict in data.get("layer_general", {}).items():
             for u, v_dict in u_dict.items():
                 for v, edge_stats in v_dict.items():
@@ -371,9 +414,11 @@ class STDB:
         edge = graph[u][v]
         if overwrite:
             edge["success_cnt"] = new_stats.get("success_cnt", 0.0)
+            edge["total_cnt"] = new_stats.get("total_cnt", new_stats.get("success_cnt", 0.0))
             edge["total_dist"] = new_stats.get("total_dist", 0.0)
             edge["dist_samples"] = new_stats.get("dist_samples", 0)
         else:
             edge["success_cnt"] += new_stats.get("success_cnt", 0.0)
+            edge["total_cnt"] += new_stats.get("total_cnt", new_stats.get("success_cnt", 0.0))
             edge["total_dist"] += new_stats.get("total_dist", 0.0)
             edge["dist_samples"] += new_stats.get("dist_samples", 0)

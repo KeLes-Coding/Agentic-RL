@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 @dataclass
-@dataclass
 class STDBConfig:
     enable: bool = True
     
@@ -13,15 +12,15 @@ class STDBConfig:
     alpha_dist: float = 0.5  # 距离衰减指数
     epsilon: float = 1e-6    # 防止除零
     
+    # v4.1: Bayesian Smoothing
+    bayesian_alpha: float = 1.0  # Beta(alpha, alpha) 先验, 1.0 = 均匀先验
+    
+    # v4.1: Criticality weight
+    lambda_crit: float = 1.0  # C(E) 权重 λ in (1 + λ·C(E))
+    
     # Cold Start Seeding
     seed_path: Optional[str] = None
-    stdb_save_path: Optional[str] = None  # Moved from CCAPOConfig to keep it self-contained if needed, or keep in CCAPOConfig. 
-    # Actually, manager uses config.stdb_save_path from CCAPOConfig usually, let's check. 
-    # Manager uses self.config.stdb_save_path.
-    
-    # Legacy parameters removed: 
-    # weight_success, weight_critical, weight_utility, c_explore, 
-    # z_score_beta, z_score_clip, normalization_mode, reward_scale, reward_temp
+    stdb_save_path: Optional[str] = None
 
 @dataclass
 class LASRConfig:
@@ -41,7 +40,7 @@ class InvalidActionPenaltyConfig:
 @dataclass
 class CCAPOConfig:
     """
-    Main Configuration for CCAPO v3.0.
+    Main Configuration for CCAPO v4.1.
     """
     enable: bool = True
     stdb: STDBConfig = field(default_factory=STDBConfig)
@@ -53,13 +52,10 @@ class CCAPOConfig:
     log_dir: str = "local_logger"
     stdb_save_path: Optional[str] = None
     
-    # M_eff 效率调制参数
-    max_steps: int = 50
-    max_tokens: int = 10000
+    # v4.1: Dual-Stream Reward Parameters
+    r_terminal: float = 10.0    # 成功终端奖励
+    r_penalty: float = -0.1     # 每步时间惩罚（恒为负值）
     
-    # 奖励组合参数
-    # v3.0: 归一化加性奖励，直接相加。
-    # Success: 1.0 + r_micro
-    # Failure: -1.0 + r_micro
-    # 保持 beta_micro 但默认设为 1.0，除非需要微调幅度。
-    beta_micro: float = 1.0
+    # v4.1: A_micro Normalization
+    beta_micro: float = 0.5     # A_micro 融合权重 β
+    sigma_min: float = 0.1      # A_micro z-score 标准化最小标准差阈值

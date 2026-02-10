@@ -63,6 +63,7 @@ from verl.workers.rollout.async_server import AsyncLLMServerManager
 from gigpo import core_gigpo
 
 from agent_system.multi_turn_rollout import TrajectoryCollector, adjust_batch
+from agent_system.ccapo.ccapo_advantage import compute_ccapo_dual_stream_advantage
 from agent_system.instrumentation.trace_logger import GlobalTraceLogger
 
 WorkerType = Type[Worker]
@@ -95,6 +96,7 @@ class AdvantageEstimator(str, Enum):
     RLOO = "rloo"
     GRPO_PASSK = "grpo_passk"
     GiGPO = 'gigpo'
+    CCAPO = 'ccapo'
 
 
 @dataclass
@@ -358,6 +360,23 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
+    elif adv_estimator == AdvantageEstimator.CCAPO:
+        # CCAPO v4.1 Dual-Stream Advantage
+        ccapo_beta = kwargs.get('ccapo_beta_micro', 0.5)
+        ccapo_sigma_min = kwargs.get('ccapo_sigma_min', 0.1)
+        a_micro_raw = data.non_tensor_batch.get('a_micro_raw', np.zeros(token_level_rewards.shape[0]))
+        advantages, returns = compute_ccapo_dual_stream_advantage(
+            token_level_rewards=data.batch['token_level_rewards'],
+            response_mask=data.batch['response_mask'],
+            index=data.non_tensor_batch['uid'],
+            traj_index=data.non_tensor_batch['traj_uid'],
+            a_micro_raw=a_micro_raw,
+            beta_micro=ccapo_beta,
+            sigma_min=ccapo_sigma_min,
+            norm_adv_by_std=norm_adv_by_std_in_grpo,
+        )
+        data.batch['advantages'] = advantages
+        data.batch['returns'] = returns
     else:
         raise NotImplementedError
     return data
@@ -452,7 +471,8 @@ class RayPPOTrainer:
             AdvantageEstimator.REMAX,
             AdvantageEstimator.RLOO,
             AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE,
-            AdvantageEstimator.GiGPO
+            AdvantageEstimator.GiGPO,
+            AdvantageEstimator.CCAPO
         ]:
             self.use_critic = False
         else:
@@ -1249,6 +1269,8 @@ class RayPPOTrainer:
 
                         norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True)  # GRPO adv normalization factor
 
+                        # CCAPO params (read from config if present)
+                        ccapo_cfg = self.config.algorithm.get('ccapo', {})
                         batch = compute_advantage(
                             batch,
                             adv_estimator=self.config.algorithm.adv_estimator,
@@ -1264,6 +1286,8 @@ class RayPPOTrainer:
                             gigpo_mode=self.config.algorithm.gigpo.mode,
                             gigpo_enable_similarity= self.config.algorithm.gigpo.enable_similarity,
                             gigpo_similarity_thresh=self.config.algorithm.gigpo.similarity_thresh,
+                            ccapo_beta_micro=ccapo_cfg.get('beta_micro', 0.5),
+                            ccapo_sigma_min=ccapo_cfg.get('sigma_min', 0.1),
                         )
 
                     # update critic

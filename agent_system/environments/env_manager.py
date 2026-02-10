@@ -139,11 +139,10 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
     def __init__(self, envs, projection_f, config):
         self.memory = SimpleMemory()
         
-        # CCAPO Config Parsing
-        ccapo_conf = CCAPOConfig(enable=False) # Default off unless specified
+        # CCAPO v4.1 Config Parsing
+        ccapo_conf = CCAPOConfig(enable=False)
         if hasattr(config, "algorithm") and hasattr(config.algorithm, "ccapo"):
             c = config.algorithm.ccapo
-            # Enable flag (support both 'enable' and 'enable_ccapo')
             ccapo_conf.enable = c.get("enable", c.get("enable_ccapo", False))
             
             # Loop Penalty
@@ -161,11 +160,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 if "penalty_value" in ic:
                     ccapo_conf.invalid_action_penalty.penalty_value = float(ic.penalty_value)
             
-            # STDB Mode
-            if "enable_update_then_evaluate" in c and c.enable_update_then_evaluate:
-                ccapo_conf.stdb.mode = "update_then_evaluate"
-            
-            # Log Path (if user specifies stdb_save_path, we treat it as part of log dir config roughly)
+            # Log Path
             if "log_dir" in c:
                 ccapo_conf.log_dir = c.log_dir
 
@@ -173,23 +168,20 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             if "stdb_save_path" in c:
                 ccapo_conf.stdb_save_path = c.stdb_save_path
             
-            # STDB Parameters (v3.1)
+            # v4.1 STDB Parameters
             if "stdb" in c:
                 sc = c.stdb
-                if "c_explore" in sc: ccapo_conf.stdb.c_explore = float(sc.c_explore)
-                if "alpha_prior" in sc: ccapo_conf.stdb.alpha_prior = float(sc.alpha_prior)
-                if "beta_prior" in sc: ccapo_conf.stdb.beta_prior = float(sc.beta_prior)
-                if "reward_scale" in sc: ccapo_conf.stdb.reward_scale = float(sc.reward_scale)
-                if "reward_temp" in sc: ccapo_conf.stdb.reward_temp = float(sc.reward_temp)
-                if "enable_tanh_gating" in sc: ccapo_conf.stdb.enable_tanh_gating = bool(sc.enable_tanh_gating)
-                if "normalization_mode" in sc: ccapo_conf.stdb.normalization_mode = str(sc.normalization_mode)
-                if "z_score_beta" in sc: ccapo_conf.stdb.z_score_beta = float(sc.z_score_beta)
-                if "z_score_clip" in sc: ccapo_conf.stdb.z_score_clip = float(sc.z_score_clip)
+                if "bayesian_alpha" in sc: ccapo_conf.stdb.bayesian_alpha = float(sc.bayesian_alpha)
+                if "lambda_gen" in sc: ccapo_conf.stdb.lambda_gen = float(sc.lambda_gen)
+                if "alpha_dist" in sc: ccapo_conf.stdb.alpha_dist = float(sc.alpha_dist)
+                if "lambda_crit" in sc: ccapo_conf.stdb.lambda_crit = float(sc.lambda_crit)
                 if "seed_path" in sc: ccapo_conf.stdb.seed_path = str(sc.seed_path)
                 
-            # Global Micro Weight
-            if "beta_micro" in c:
-                ccapo_conf.beta_micro = float(c.beta_micro)
+            # v4.1 Dual-Stream Parameters
+            if "r_terminal" in c: ccapo_conf.r_terminal = float(c.r_terminal)
+            if "r_penalty" in c: ccapo_conf.r_penalty = float(c.r_penalty)
+            if "beta_micro" in c: ccapo_conf.beta_micro = float(c.beta_micro)
+            if "sigma_min" in c: ccapo_conf.sigma_min = float(c.sigma_min)
 
         self.ccapo = CCAPOManager(ccapo_conf)
         super().__init__(envs, projection_f, config)
@@ -271,255 +263,79 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
         self.memory.store({'text_obs': self.pre_text_obs, 'action': actions})
         self.pre_text_obs = text_obs
 
-            # CCAPO Logic: Loop Detection & Fingerprinting
-        ccapo_rewards = np.zeros_like(rewards)
-        diagnostics = get_diagnostics(self.ccapo.config.log_dir) if self.ccapo.config.enable else None
+        # ============================================================
+        # CCAPO v4.1: Simplified Step Logic
+        # - Only collect trace (fingerprints) per step
+        # - On episode end, call process_episode() for dual-stream data
+        # - Inject R_tau as last-step reward
+        # - Store a_micro_raw in infos for trainer consumption
+        # ============================================================
         
         for i, action in enumerate(actions):
-            # 1. Fingerprint
+            if not self.ccapo.config.enable:
+                continue
+                
             fp_action = self.ccapo.process_step_action(action)
             
-            # 2. Check Loop (Immediate Penalty)
-            # 2. Check Loop & Stats Setup
-            trace = self.ccapo_trace[i]
+            # Only track valid actions in the trace
+            if valids[i] == 1:
+                self.ccapo_trace[i].append(fp_action)
             
-            loop_penalty = 0.0
-            invalid_action_penalty = 0.0
-            valid_action_reward = 0.0
-            r_stdb = 0.0
-            is_loop = False
-            loop_type = None
-            
-            if self.ccapo.config.enable:
-                # [FIX]: Only process STDB/Loop logic if action is VALID
-                if valids[i] == 1:
-                    # Valid Action Path
-                    valid_action_reward = 0.01
-                    
-                    # Logic 1: Loop Check on existing trace
-                    if len(trace) > 0 and fp_action == trace[-1]:
-                        loop_penalty = self.ccapo.get_loop_penalty()
-                        is_loop = True
-                        loop_type = "self_loop"
-                    elif len(trace) > 1 and fp_action == trace[-2]:
-                        loop_penalty = self.ccapo.get_loop_penalty()
-                        is_loop = True
-                        loop_type = "backtrack"
-                    
-                    # Logic 2: Update Trace (Only if valid)
-                    self.ccapo_trace[i].append(fp_action)
-                    
-                    # Logic 3: Query STDB (Only if valid)
-                    if self.ccapo.stdb:
-                        try:
-                            # Use the updated trace which includes current action
-                            stdb_result = self.ccapo.stdb.query(self.ccapo_trace[i], log_diagnostics=False, context=self.ep_contexts[i])
-                            if isinstance(stdb_result, tuple):
-                                stdb_rewards_list, _ = stdb_result
-                            else:
-                                stdb_rewards_list = stdb_result
-                            r_stdb = stdb_rewards_list[-1] if stdb_rewards_list else 0.0
-                        except Exception as e:
-                            r_stdb = 0.0
-                            
-                else:
-                    # Invalid Action Path: 
-                    # - No Trace Update (Invisible to STDB)
-                    # - No STDB Reward
-                    # - Only Penalty
-                    invalid_action_penalty = self.ccapo.get_invalid_action_penalty()
-
-            ccapo_rewards[i] = loop_penalty + invalid_action_penalty + valid_action_reward + r_stdb
-            
-            # [NEW] Detailed Reward Logging Accumulation
-            # We need to reconstruct the full sequence of rewards for this episode
-            if not hasattr(self, 'reward_history'):
-                 self.reward_history = [[] for _ in range(len(actions))]
-            
+            # Log step for debugging
             self.reward_history[i].append({
                 "step": len(self.reward_history[i]) + 1,
                 "action": action,
                 "fp": fp_action,
                 "valid": bool(valids[i]),
-                "r_loop": loop_penalty,
-                "r_invalid": invalid_action_penalty,
-                "r_valid": valid_action_reward,
-                "r_stdb": r_stdb,
-                "r_total": ccapo_rewards[i]
-            })
-            
-            # 记录步骤诊断
-            if diagnostics:
-                diagnostics.log_step_detail(
-                    env_id=i,
-                    step_idx=len(self.reward_history[i]), # Use history len as accurate step count
-                    action_raw=action,
-                    action_fp=fp_action,
-                    is_loop=is_loop,
-                    loop_type=loop_type,
-                    is_valid=bool(valids[i]),
-                    r_loop=loop_penalty,
-                    r_invalid=invalid_action_penalty,
-                    r_valid=valid_action_reward,
-                    r_stdb=r_stdb,
-                    r_total=ccapo_rewards[i],
-                    trace_so_far=self.ccapo_trace[i].copy()
-                )
-
-            # Log for debug
-            if self.ccapo.config.enable:
-                 self.ccapo.logger.log_ccapo_debug("step", {
-                     "env_id": i,
-                     "action": action,
-                     "fp": fp_action,
-                     "loop_penalty": loop_penalty,
-                     "loop_type": loop_type,
-                     "invalid_penalty": invalid_action_penalty,
-                     "valid_flag": int(valids[i]),
-                     "r_stdb": r_stdb,
-                     "step": len(self.reward_history[i])
-                 })
-            
-            # [NEW] Log Granular Env Step
-            self.ccapo.logger.log_env_step({
-                "env_id": i,
-                "step_idx": len(self.reward_history[i]),
-                "action": action,
-                "reward_env": float(rewards[i]), # Original env reward
-                "reward_ccapo": float(ccapo_rewards[i]),
-                "total_reward": float(rewards[i] + ccapo_rewards[i]),
-                "done": bool(dones[i]),
-                "won": bool(infos[i].get("won", False)),
-                "pddl_valid": bool(infos[i].get("is_action_valid", False)),
-                "text_obs": text_obs[i]
             })
 
-            # [CCAPO] End of Episode Update
-            if dones[i] and self.ccapo.config.enable:
-                 won = bool(infos[i].get("won", False))
-                 
-                 # Use pre-parsed context
-                 context_keys = self.ep_contexts[i]
-                 
-                 # 记录 Context 解析诊断
-                 if diagnostics:
-                     diagnostics.log_episode_context(
-                         env_id=i,
-                         gamefile_raw=context_keys.get("gamefile", ""),
-                         parsed_task_type=context_keys["task_type"],
-                         parsed_seed=context_keys["seed"],
-                         parse_success=context_keys["task_type"] != "unknown_task",
-                         won=won
-                     )
-
-                 # 使用 process_episode 返回值
-                 # process_episode can also accept context to ensure it updates the correct local graph
-                 episode_result = self.ccapo.process_episode(
+            # [CCAPO v4.1] End of Episode: Dual-Stream Processing
+            if dones[i]:
+                won = bool(infos[i].get("won", False))
+                context_keys = self.ep_contexts[i]
+                
+                # Call process_episode → returns {r_tau, r_micro, a_micro_raw, ...}
+                episode_result = self.ccapo.process_episode(
                     self.ccapo_trace[i],
                     outcome=won,
                     context_keys=context_keys
-                 )
-                 
-                 # [FIX] CRITICAL: Inject Macro Reward (and updated Micro) into the LAST step
-                 # episode_result["rewards"] contains the full aligned rewards including the final Outcome Injection.
-                 # The last element corresponds to the current step (since done=True).
-                 if "rewards" in episode_result and len(episode_result["rewards"]) > 0:
-                     # Note: manager.py now implements Dense Reward (Macro added to every step).
-                     # However, we can't easily update past steps in the Trainer buffer here.
-                     # For GRPO (sum of rewards), we just need to ensure the SUM is correct.
-                     # The immediate rewards sum to Sum(r_micro_immediate).
-                     # The desired dense rewards sum to Sum(r_micro_post + r_macro).
-                     # So we add the difference to the last step to correct the total sum.
-                     
-                     ccapo_target_sum = sum(episode_result["rewards"])
-                     
-                     # We need to track what we already gave.
-                     # Since we don't track cumulative reward in `ccapo_trace`, we might need to approximate
-                     # or assume (if beta is small/zero) that immediate rewards were just STDB.
-                     # But actually, EnvManager gave `r_stdb` at each step.
-                     # Let's assume we just add the "Missing Macro Portion" to the last step for now,
-                     # to satisfy GRPO.
-                     
-                     # Simplified: Just ensure the last step gets the final chunk of the dense reward + any correction.
-                     # But wait, if R_dense = R_macro + R_micro, and we already gave R_micro_immediate...
-                     # The correction is: (R_macro * T) + Sum(R_micro_post - R_micro_pre).
-                     
-                     # Since implementing "True Dense" retrospectively is hard, we stick to:
-                     # Add the FINAL step's dense reward value here.
-                     # BUT, we must ensure we don't double count if we already gave loop penalties etc.
-                     
-                     # Let's trust that episode_result["rewards"][-1] is the reward for the final step.
-                     # But for GRPO, we want the TRAJECTORY SUM to be correct.
-                     
-                     # Calculate correction needed:
-                     # current_sum = sum(self.reward_history[i]) (excluding this last step's partials)
-                     # target_sum = sum(episode_result["rewards"])
-                     # correction = target_sum - current_episode_accumulated
-                     
-                     # However, self.reward_history is for logging.
-                     # Let's just Apply the Macro-weighted last-step logic from the old code 
-                     # BUT adapted: We assume manager.py returned the correct shaped reward.
-                     # We simply take the last value? No, that misses the macro from previous steps.
-                     
-                     # COMPROMISE for GRPO:
-                     # We add (Total_Target_Reward - Sum_of_Step_Rewards_So_Far) to the current reward.
-                     # This ensures the Episode Return is exactly what manager.py calculated.
-                     
-                     # Gather what we gave so far (approximate from history log if available, or just last step injection)
-                     # Since we can't easily know "Sum So Far" perfectly without tracking, 
-                     # we revert to the simple logic: 
-                     # The previous code added `r_macro`.
-                     # Now `process_episode` adds `r_macro` to EVERY step.
-                     # So Total Macro Influence is T * r_macro.
-                     
-                     # Let's just inject (T * r_macro) into the last step for GRPO correctness.
-                     
-                     m_eff = episode_result.get("m_eff", 1.0)
-                     r_core = 1.0 if won else 0.0
-                     if won:
-                          weighted_core = r_core * m_eff
-                     else:
-                          weighted_core = r_core
-                     
-                     # Trajectory Length
-                     T = len(episode_result["rewards"])
-                     total_macro_correction = weighted_core * T
-                     
-                     ccapo_rewards[i] += total_macro_correction
-                     
-                     # Update detailed log for analysis consistency
-                     if hasattr(self, 'reward_history') and len(self.reward_history) > i and len(self.reward_history[i]) > 0:
-                         self.reward_history[i][-1]["r_macro"] = total_macro_correction # Log as one lump sum
-                         self.reward_history[i][-1]["r_total"] += total_macro_correction
-                                    
-                 # [NEW] Log Detailed Rewards History
-                 if hasattr(self, 'reward_history') and len(self.reward_history) > i:
-                     try:
-                         detailed_log_path = os.path.join(self.ccapo.config.log_dir, "detailed_rewards.jsonl")
-                         
-                         log_entry = {
-                             "timestamp": time.time(),
-                             "env_id": i,
-                             "task_type": context_keys.get("task_type", "unknown"),
-                             "seed": context_keys.get("seed", "unknown"),
-                             "outcome": won,
-                             "steps": self.reward_history[i]
-                         }
-                         
-                         with open(detailed_log_path, "a", encoding='utf-8') as f:
-                             f.write(json.dumps(log_entry) + "\n")
-                             
-                     except Exception as e:
-                         print(f"[CCAPO] Error writing detailed logs: {e}")
-                     
-                     # Reset history for this environment
-                     self.reward_history[i] = []
-
-                 # Reset trace for next episode
-                 self.ccapo_trace[i] = []
-
-        # Add CCAPO rewards to environment rewards
-        rewards = rewards + ccapo_rewards
+                )
+                
+                # Inject R_tau into the last step's reward for GRPO
+                # This is the episode-level macro reward with time penalty
+                rewards[i] += episode_result["r_tau"]
+                
+                # Store a_micro_raw mean in info for trainer's advantage computation
+                a_micro_vals = episode_result.get("a_micro_raw", [])
+                mean_a_micro = float(np.mean(a_micro_vals)) if a_micro_vals else 0.0
+                infos[i]["a_micro_raw"] = mean_a_micro
+                infos[i]["r_tau"] = episode_result["r_tau"]
+                infos[i]["r_micro"] = episode_result.get("r_micro", [])
+                
+                # Log detailed episode data
+                try:
+                    detailed_log_path = os.path.join(self.ccapo.config.log_dir, "detailed_rewards.jsonl")
+                    os.makedirs(os.path.dirname(detailed_log_path), exist_ok=True)
+                    log_entry = {
+                        "timestamp": time.time(),
+                        "env_id": i,
+                        "task_type": context_keys.get("task_type", "unknown"),
+                        "seed": context_keys.get("seed", "unknown"),
+                        "outcome": won,
+                        "r_tau": episode_result["r_tau"],
+                        "a_micro_raw_mean": mean_a_micro,
+                        "n_steps": episode_result["n_steps"],
+                        "loops_removed": len(episode_result.get("loops_removed", [])),
+                        "steps": self.reward_history[i]
+                    }
+                    with open(detailed_log_path, "a", encoding='utf-8') as f:
+                        f.write(json.dumps(log_entry) + "\n")
+                except Exception as e:
+                    print(f"[CCAPO] Error writing detailed logs: {e}")
+                
+                # Reset trace and history for next episode
+                self.ccapo_trace[i] = []
+                self.reward_history[i] = []
 
         full_text_obs = self.build_text_obs(text_obs, self.envs.get_admissible_commands)
         if infos[0].get("extra.gamefile") is None:

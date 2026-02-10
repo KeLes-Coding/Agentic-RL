@@ -3,7 +3,7 @@ chcp 65001 >nul
 REM Sync remote logs and data to local (Windows)
 REM Usage: sync_logs.bat
 
-set REMOTE_HOST=zzh@218.192.110.198
+set REMOTE_HOST=zzh@8.148.233.55
 set REMOTE_BASE=~/Workspace/260126/agentic-rl
 set LOCAL_BASE=.
 

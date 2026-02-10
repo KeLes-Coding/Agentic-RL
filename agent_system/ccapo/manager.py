@@ -1,7 +1,11 @@
 """
-CCAPO Manager v3.0
+CCAPO Manager v4.1
 中央管理器，处理配置、初始化组件、提供高级 API。
-包含：循环过滤、M_eff 计算、Update-then-Evaluate 逻辑。
+
+v4.1 Changes:
+- process_episode() returns dual-stream data (R_tau + R_micro + A_micro_raw)
+- Removed M_eff efficiency modulation (replaced by R_penalty time penalty)
+- Loop filtering preserved for STDB update
 """
 from typing import List, Tuple, Dict, Any, Optional
 import logging
@@ -64,36 +68,10 @@ def filter_loops(trace: List[str]) -> Tuple[List[str], List[Dict]]:
     return filtered, loops_removed
 
 
-def compute_m_eff(
-    steps: int,
-    tokens: int = 0,
-    max_steps: int = 50,
-    max_tokens: int = 10000
-) -> Tuple[float, float, float]:
-    """
-    计算效率调制 M_eff。
-    
-    公式: M_eff = sqrt(max(0, 1 - steps/max_steps)) * sqrt(max(0, 1 - tokens/max_tokens))
-    
-    Returns:
-        Tuple of (m_eff_steps, m_eff_tokens, m_eff_final)
-    """
-    m_eff_steps = math.sqrt(max(0.0, 1.0 - steps / max_steps))
-    
-    if tokens > 0 and max_tokens > 0:
-        m_eff_tokens = math.sqrt(max(0.0, 1.0 - tokens / max_tokens))
-    else:
-        m_eff_tokens = 1.0  # 不使用 token 惩罚
-    
-    m_eff_final = m_eff_steps * m_eff_tokens
-    
-    return m_eff_steps, m_eff_tokens, m_eff_final
-
-
 class CCAPOManager:
     """
-    Central Manager for CCAPO v3.0.
-    Handles configuration toggles, initializes components, and exposes high-level APIs.
+    Central Manager for CCAPO v4.1.
+    Handles configuration, STDB lifecycle, and dual-stream reward computation.
     """
     _instance = None
     
@@ -108,21 +86,17 @@ class CCAPOManager:
             
         self.config = config if config else CCAPOConfig()
         self.logger = GlobalTraceLogger(base_log_dir=self.config.log_dir)
-        # 使用 logger 的 run_id 确保诊断日志与主日志在同一目录
         self.diagnostics = get_diagnostics(self.config.log_dir, run_id=self.logger.run_id)
         
         if self.config.enable and self.config.stdb.enable:
             self.stdb = STDB(self.config.stdb)
-            # Try load if path exists
             loaded = False
             if self.config.stdb_save_path:
-                # Check exist strictly before load to know if we succeeded (since load is silent)
                 if os.path.exists(self.config.stdb_save_path):
                     self.stdb.load(self.config.stdb_save_path)
                     loaded = True
             
-            # Cold Start Seeding
-            # Only seed if we didn't load a checkpoint (to avoid double counting)
+            # Cold Start Seeding (only if no checkpoint loaded)
             if not loaded and self.config.stdb.seed_path:
                 self.stdb.seed_from_json(self.config.stdb.seed_path)
         else:
@@ -148,41 +122,35 @@ class CCAPOManager:
         tokens_used: int = 0
     ) -> Dict[str, Any]:
         """
-        Process a completed episode (CCAPO v3.0 Unified Routing).
+        Process a completed episode (CCAPO v4.1 Dual-Stream).
+        
+        Returns a dict with:
+        - r_tau: float           (macro reward: R_terminal * success + N_step * R_penalty)
+        - r_micro: List[float]   (per-step STDB Q scores, aligned to trace_actions)
+        - a_micro_raw: List[float]  (per-step Q - V̄, aligned to trace_actions)
+        - filtered_trace, loops_removed, n_steps, etc.
         """
-        rewards_aligned = [0.0] * len(trace_actions)
+        n_steps = len(trace_actions)
         
         result = {
-            "rewards": [],
+            "r_tau": 0.0,
+            "r_micro": [0.0] * n_steps,
+            "a_micro_raw": [0.0] * n_steps,
             "edge_details": [],
-            "m_eff": 1.0,
-            "correction": 0.0,
             "filtered_trace": trace_actions,
-            "loops_removed": []
+            "loops_removed": [],
+            "n_steps": n_steps,
+            "outcome": outcome,
         }
         
-        # 1. Compute M_eff (Macro Efficiency)
-        max_steps = self.config.max_steps
-        max_tokens = self.config.max_tokens
-        
-        m_eff_steps, m_eff_tokens, m_eff_final = compute_m_eff(
-            steps=len(trace_actions),
-            tokens=tokens_used,
-            max_steps=max_steps,
-            max_tokens=max_tokens
-        )
-        
-        result["m_eff"] = m_eff_final
-        result["m_eff_steps"] = m_eff_steps
-        result["m_eff_tokens"] = m_eff_tokens
+        # 1. Compute R_tau (Macro Reward with Time Penalty)
+        r_terminal = self.config.r_terminal if outcome else 0.0
+        r_penalty_total = n_steps * self.config.r_penalty
+        r_tau = r_terminal + r_penalty_total
+        result["r_tau"] = r_tau
 
-        # If CCAPO disabled, return sparse reward only (at last step)
+        # If CCAPO/STDB disabled, return with just R_tau
         if not self.config.enable or not self.stdb:
-            r_outcome = 1.0 if outcome else -1.0
-            # Apply M_eff only to success?
-            final_r = r_outcome * m_eff_final if outcome else r_outcome
-            rewards_aligned[-1] = final_r
-            result["rewards"] = rewards_aligned
             return result
         
         context = context_keys or {}
@@ -194,76 +162,46 @@ class CCAPOManager:
         result["filtered_trace"] = filtered_trace
         result["loops_removed"] = loops_removed
         
-        # 3. STDB Interaction
-        # Workflow A (Success): Update-then-Evaluate
-        # Workflow B (Failure): Direct Query (No Update) v3.0 Rule
+        # 3. STDB Update (v4.1: both success AND failure update total_cnt)
+        self.stdb.update(filtered_trace, outcome, context=context)
+        if outcome and self.config.stdb_save_path:
+            self.stdb.save(self.config.stdb_save_path)
         
-        if outcome:
-            self.stdb.update(filtered_trace, outcome, context=context)
-            if self.config.stdb_save_path:
-                self.stdb.save(self.config.stdb_save_path)
-        
-        # Query (Get r_micro for all edges)
-        r_micro_list, edge_details = self.stdb.query(filtered_trace, context=context, log_diagnostics=True)
+        # 4. Query STDB for R_micro and A_micro_raw
+        r_micro_filtered, edge_details = self.stdb.query(
+            filtered_trace, context=context, log_diagnostics=True
+        )
         result["edge_details"] = edge_details
         
-        # 4. Unified Reward Routing (Additive Architecture)
-        removed_indices = {item['index']: item for item in loops_removed}
+        # 5. Build per-step R_micro and A_micro_raw aligned to original trace
+        removed_indices = {item['index'] for item in loops_removed}
+        filtered_idx = 1  # r_micro_filtered[0] = start node (0.0)
         
-        # [FIX] Start from 1. 
-        # r_micro_list[0] is the start node score (0.0). 
-        # r_micro_list[1] corresponds to the transition created by filtered_trace[0].
-        filtered_idx_counter = 1 
-        
-        loop_pen = self.config.loop_penalty.penalty_value # -1.0
-        
-        # Base Reward/Penalty
-        if outcome:
-            # Success Trajectory: Base = 1.0 * M_eff
-            base_val = 1.0 * m_eff_final
-        else:
-            # [FIX] Relax Failure Penalty to Encourge Exploration
-            # Failure Trajectory: Base = 0.0 (Neutral) instead of -1.0
-            # This prevents the "suicide drive" where agent prefers short failures.
-            # Only Loops/Invalid actions will trigger negative rewards.
-            base_val = 0.0
-            
-        # Iterate original trace to align rewards
-        for i in range(len(trace_actions)):
-            current_r_micro = 0.0
-            is_loop = i in removed_indices
-            
-            if is_loop:
-                # Loop/Backtrack: Force r_micro = -1.0 (or loop_pen)
-                current_r_micro = loop_pen
+        for i in range(n_steps):
+            if i in removed_indices:
+                # Loop step: R_micro = 0, A_micro_raw = 0
+                result["r_micro"][i] = 0.0
+                result["a_micro_raw"][i] = 0.0
             else:
-                # Valid Step: Get from STDB Query
-                if filtered_idx_counter < len(r_micro_list):
-                    current_r_micro = r_micro_list[filtered_idx_counter]
-                    filtered_idx_counter += 1
+                if filtered_idx < len(r_micro_filtered):
+                    q_value = r_micro_filtered[filtered_idx]
+                    result["r_micro"][i] = q_value
+                    
+                    # Compute V̄(S_anchor) for this step
+                    # Anchor = predecessor fingerprint in filtered trace
+                    if filtered_idx > 0 and filtered_idx - 1 < len(filtered_trace):
+                        anchor_node = filtered_trace[filtered_idx - 1]
+                        v_bar = self.stdb.query_anchor_value(anchor_node, context=context)
+                        result["a_micro_raw"][i] = q_value - v_bar
+                    else:
+                        result["a_micro_raw"][i] = 0.0
+                    
+                    filtered_idx += 1
                 else:
-                    # Last step or out of bounds
-                    current_r_micro = 0.0
-
-            # Calculate Final Step Reward
-            # Additive Combination
-            
-            if is_loop:
-                term_micro = current_r_micro 
-            else:
-                term_micro = current_r_micro * self.config.beta_micro
-            
-            step_reward = base_val + term_micro
-            
-            # Sea-Level Constraint for Failure: max 0
-            if not outcome:
-                 step_reward = min(0.0, step_reward)
-
-            rewards_aligned[i] = step_reward
-            
-        result["rewards"] = rewards_aligned
+                    result["r_micro"][i] = 0.0
+                    result["a_micro_raw"][i] = 0.0
         
-        # 5. Logging & Diagnostics
+        # 6. Logging
         if context:
             task_type = context.get("task_type", "unknown_task")
             seed = str(context.get("seed", "unknown_seed"))
@@ -278,8 +216,9 @@ class CCAPOManager:
                         "trace_raw": trace_actions,
                         "trace_fp": fp_trace,
                         "outcome": outcome,
-                        "rewards": rewards_aligned,
-                        "m_eff": m_eff_final,
+                        "r_tau": r_tau,
+                        "r_micro": result["r_micro"],
+                        "a_micro_raw": result["a_micro_raw"],
                         "context": context
                     }, f, indent=2)
             except:

@@ -376,6 +376,10 @@ class TrajectoryCollector:
             else:
                 batch.non_tensor_batch['is_action_valid'] = np.ones(batch_size, dtype=bool)
 
+            # CCAPO v4.1: Propagate a_micro_raw from infos to non_tensor_batch
+            if 'a_micro_raw' in infos[0]:
+                batch.non_tensor_batch['a_micro_raw'] = np.array([info.get('a_micro_raw', 0.0) for info in infos], dtype=np.float32)
+
             if 'tool_calling' in infos[0]:
                 tool_callings[active_masks] += np.array([info['tool_calling'] for info in infos], dtype=np.float32)[active_masks]
             # Create reward tensor, only assign rewards for active environments
