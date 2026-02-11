@@ -376,9 +376,6 @@ class TrajectoryCollector:
             else:
                 batch.non_tensor_batch['is_action_valid'] = np.ones(batch_size, dtype=bool)
 
-            # CCAPO v4.1: Propagate a_micro_raw from infos to non_tensor_batch
-            if 'a_micro_raw' in infos[0]:
-                batch.non_tensor_batch['a_micro_raw'] = np.array([info.get('a_micro_raw', 0.0) for info in infos], dtype=np.float32)
 
             if 'tool_calling' in infos[0]:
                 tool_callings[active_masks] += np.array([info['tool_calling'] for info in infos], dtype=np.float32)[active_masks]
@@ -407,6 +404,19 @@ class TrajectoryCollector:
             # Break if all environments are done
             if is_done.all():
                 break
+        
+        # CCAPO v4.1: Post-loop broadcast of a_micro_raw to all steps
+        # a_micro_raw is only set in infos at the terminal (done) step of each episode.
+        # We extract it from total_infos and broadcast to ALL steps of each trajectory
+        # so that collate_fn has consistent keys across all step dicts.
+        for bs in range(batch_size):
+            a_micro_val = 0.0
+            for info in reversed(total_infos[bs]):
+                if 'a_micro_raw' in info:
+                    a_micro_val = float(info['a_micro_raw'])
+                    break
+            for data in total_batch_list[bs]:
+                data['a_micro_raw'] = a_micro_val
         
         success: Dict[str, np.ndarray] = envs.success_evaluator(
                     total_infos=total_infos,
