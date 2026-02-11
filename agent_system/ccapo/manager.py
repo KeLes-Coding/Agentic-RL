@@ -143,10 +143,14 @@ class CCAPOManager:
             "outcome": outcome,
         }
         
-        # 1. Compute R_tau (Macro Reward with Time Penalty)
-        r_terminal = self.config.r_terminal if outcome else 0.0
-        r_penalty_total = n_steps * self.config.r_penalty
-        r_tau = r_terminal + r_penalty_total
+        if outcome:
+            r_terminal = self.config.r_terminal
+            r_penalty_total = n_steps * self.config.r_penalty
+            r_tau = r_terminal + r_penalty_total
+        else:
+            r_terminal = 0.0
+            r_penalty_total = 0.0
+            r_tau = 0.0
         result["r_tau"] = r_tau
 
         # If CCAPO/STDB disabled, return with just R_tau

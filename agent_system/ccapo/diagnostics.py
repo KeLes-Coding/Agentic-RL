@@ -199,40 +199,28 @@ class CCAPODiagnostics:
             "won": won
         })
     
-    # ========== Step Level ==========
+    # ========== Step Level (v4.1 Dual-Stream) ==========
     def log_step_detail(
         self,
         env_id: int,
         step_idx: int,
         action_raw: str,
         action_fp: str,
-        is_loop: bool,
-        loop_type: Optional[str],  # "self_loop" | "backtrack" | None
         is_valid: bool,
-        r_loop: float,
-        r_invalid: float,
-        r_valid: float,
-        r_stdb: float,
-        r_total: float,
-        trace_so_far: List[str]
+        r_micro: float,
+        a_micro: float
     ):
-        """记录每一步的详细计算"""
+        """记录每一步的详细计算 (v4.1 Dual-Stream)"""
         self._write("step_detail", {
             "env_id": env_id,
             "step_idx": step_idx,
             "action_raw": action_raw,
             "action_fp": action_fp,
-            "is_loop": is_loop,
-            "loop_type": loop_type,
             "is_valid": is_valid,
             "rewards": {
-                "r_loop": r_loop,
-                "r_invalid": r_invalid,
-                "r_valid": r_valid,
-                "r_stdb": r_stdb,
-                "r_total": r_total
-            },
-            "trace_length": len(trace_so_far)
+                "r_micro": r_micro,
+                "a_micro_raw": a_micro
+            }
         })
     
     def close(self):

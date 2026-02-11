@@ -98,7 +98,12 @@ $$D(E) = \frac{1}{(d_{goal}(E) + 1)^\alpha} \quad (\alpha \approx 0.5)$$
 
 **目标**：强制模型追求最短路径，惩罚冗余步骤。这是物理世界的"绝对真理"。
 
-$$R_\tau = \mathbb{I}(\text{Success}) \cdot R_{terminal} + N_{step} \cdot R_{penalty}$$
+$$
+R_\tau = \begin{cases} 
+R_{terminal} + N_{step} \cdot R_{penalty} & \text{if Success} \\
+0 & \text{if Failure}
+\end{cases}
+$$
 
 - **参数设定 (v4.1 调整)**：
   - $R_{terminal} = +10.0$ （成功的大额奖励）
@@ -111,8 +116,8 @@ $$R_\tau = \mathbb{I}(\text{Success}) \cdot R_{terminal} + N_{step} \cdot R_{pen
   | 成功，10 步 | $10 + 10 \times (-0.1) = +9.0$ |
   | 成功，20 步 | $10 + 20 \times (-0.1) = +8.0$ |
   | 成功，40 步 | $10 + 40 \times (-0.1) = +6.0$ |
-  | 失败，30 步 | $0 + 30 \times (-0.1) = -3.0$ |
-  | 失败，50 步 | $0 + 50 \times (-0.1) = -5.0$ |
+  | 失败，30 步 | $0$ (基线，无自杀激励) |
+  | 失败，50 步 | $0$ (基线，鼓励探索) |
 
 - **特性**：10 步成功 vs 40 步成功差值为 3.0（相比 v4.0 的 1.5 翻倍），区分度显著增强。
 
