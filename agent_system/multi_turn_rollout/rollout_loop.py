@@ -405,18 +405,27 @@ class TrajectoryCollector:
             if is_done.all():
                 break
         
-        # CCAPO v4.1: Post-loop broadcast of a_micro_raw to all steps
-        # a_micro_raw is only set in infos at the terminal (done) step of each episode.
-        # We extract it from total_infos and broadcast to ALL steps of each trajectory
-        # so that collate_fn has consistent keys across all step dicts.
+        # CCAPO v4.1: Assign step-specific a_micro_raw
         for bs in range(batch_size):
-            a_micro_val = 0.0
+            # Retrieve the full list from the terminal info
+            a_micro_list = []
             for info in reversed(total_infos[bs]):
-                if 'a_micro_raw' in info:
-                    a_micro_val = float(info['a_micro_raw'])
-                    break
-            for data in total_batch_list[bs]:
-                data['a_micro_raw'] = a_micro_val
+                 if 'a_micro_raw' in info and isinstance(info['a_micro_raw'], list):
+                     a_micro_list = info['a_micro_raw']
+                     break
+            
+            # Assign explicitly to each step ensuring alignment
+            steps_data = total_batch_list[bs]
+            n_steps = len(steps_data)
+            n_rewards = len(a_micro_list)
+            
+            # Ideally n_steps == n_rewards. 
+            # If mismatch, pad with 0.0 or truncate (though mismatch implies bug elsewhere)
+            for t in range(n_steps):
+                if t < n_rewards:
+                    steps_data[t]['a_micro_raw'] = float(a_micro_list[t])
+                else:
+                    steps_data[t]['a_micro_raw'] = 0.0
         
         success: Dict[str, np.ndarray] = envs.success_evaluator(
                     total_infos=total_infos,
