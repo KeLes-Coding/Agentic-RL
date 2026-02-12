@@ -180,6 +180,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             # v4.1 Dual-Stream Parameters
             if "r_terminal" in c: ccapo_conf.r_terminal = float(c.r_terminal)
             if "r_penalty" in c: ccapo_conf.r_penalty = float(c.r_penalty)
+            if "r_failure" in c: ccapo_conf.r_failure = float(c.r_failure)
             if "beta_micro" in c: ccapo_conf.beta_micro = float(c.beta_micro)
             if "sigma_min" in c: ccapo_conf.sigma_min = float(c.sigma_min)
 

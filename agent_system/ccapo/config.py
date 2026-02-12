@@ -55,6 +55,7 @@ class CCAPOConfig:
     # v4.1: Dual-Stream Reward Parameters
     r_terminal: float = 10.0    # 成功终端奖励
     r_penalty: float = -0.1     # 每步时间惩罚（恒为负值）
+    r_failure: float = -1.0     # 失败固定惩罚（避免自杀倾向）
     
     # v4.1: A_micro Normalization
     beta_micro: float = 0.5     # A_micro 融合权重 β

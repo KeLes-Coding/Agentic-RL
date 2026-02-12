@@ -150,7 +150,7 @@ class CCAPOManager:
         else:
             r_terminal = 0.0
             r_penalty_total = 0.0
-            r_tau = 0.0
+            r_tau = self.config.r_failure
         result["r_tau"] = r_tau
 
         # If CCAPO/STDB disabled, return with just R_tau
