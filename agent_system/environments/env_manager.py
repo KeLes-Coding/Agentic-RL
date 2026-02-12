@@ -309,6 +309,10 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 # [CCAPO Fix] Pass full list for step-level granularity, DO NOT AVERAGE
                 a_micro_vals = episode_result.get("a_micro_raw", [])
                 infos[i]["a_micro_raw"] = a_micro_vals
+                
+                # [Fix] Calculate mean for logging only (as requested by existing logging code)
+                mean_a_micro = float(np.mean(a_micro_vals)) if a_micro_vals else 0.0
+
                 infos[i]["r_tau"] = episode_result["r_tau"]
                 infos[i]["r_micro"] = episode_result.get("r_micro", [])
                 
