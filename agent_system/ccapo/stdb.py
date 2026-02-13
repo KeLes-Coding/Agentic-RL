@@ -51,6 +51,34 @@ class STDB:
             "total_edges": 0.0,
         }
 
+    def _normalize_stats(self, loaded_stats: Optional[Dict] = None):
+        """Ensure stats schema is complete and numeric after loading legacy files."""
+        defaults = {
+            "total_success": 0.0,
+            "total_fail": 0.0,
+            "total_success_edges": 0.0,
+            "total_edges": 0.0,
+        }
+        source = loaded_stats if isinstance(loaded_stats, dict) else {}
+        self.stats = {k: float(source.get(k, v)) for k, v in defaults.items()}
+
+    def _recompute_edge_counters_from_specific(self):
+        """
+        Rebuild global edge counters from layer_specific.
+        We use specific layer only to avoid double-counting with general layer.
+        """
+        total_success_edges = 0.0
+        total_edges = 0.0
+        for _, u_dict in self.layer_specific.items():
+            for _, v_dict in u_dict.items():
+                for _, edge in v_dict.items():
+                    succ = float(edge.get("success_cnt", 0.0))
+                    total = float(edge.get("total_cnt", succ))
+                    total_success_edges += succ
+                    total_edges += total
+        self.stats["total_success_edges"] = total_success_edges
+        self.stats["total_edges"] = total_edges
+
     def seed_from_json(self, json_path: str):
         """
         Seed the STDB from a JSON file.
@@ -101,9 +129,9 @@ class STDB:
         
         # Global Stats Update
         if outcome:
-            self.stats["total_success"] += 1.0
+            self.stats["total_success"] = self.stats.get("total_success", 0.0) + 1.0
         else:
-            self.stats["total_fail"] += 1.0
+            self.stats["total_fail"] = self.stats.get("total_fail", 0.0) + 1.0
 
         specific_key = f"{task_type}_{seed}"
         T = len(trace)
@@ -111,14 +139,14 @@ class STDB:
         for i in range(T - 1):
             u = trace[i]
             v = trace[i+1]
-            self.stats["total_edges"] += 1.0
+            self.stats["total_edges"] = self.stats.get("total_edges", 0.0) + 1.0
             
             # v4.1: ALWAYS update total_cnt
             self._update_edge_total(self.layer_specific[specific_key], u, v)
             self._update_edge_total(self.layer_general[task_type], u, v)
             
             if outcome:
-                self.stats["total_success_edges"] += 1.0
+                self.stats["total_success_edges"] = self.stats.get("total_success_edges", 0.0) + 1.0
                 # Only success: update success_cnt and distance
                 dist_to_goal = T - 1 - (i + 1)
                 self._update_edge_success(self.layer_specific[specific_key], u, v, dist_to_goal)
@@ -318,8 +346,9 @@ class STDB:
         try:
             with open(path, 'r') as f:
                 data = json.load(f)
-            
-            self.stats = data.get("stats", self.stats)
+
+            raw_stats = data.get("stats", {})
+            self._normalize_stats(raw_stats)
             version = data.get("version", "3.0")
             
             def restore_layer(target, source, needs_total_cnt_backfill):
@@ -334,6 +363,11 @@ class STDB:
             needs_backfill = version < "4.1"
             restore_layer(self.layer_specific, data.get("layer_specific", {}), needs_backfill)
             restore_layer(self.layer_general, data.get("layer_general", {}), needs_backfill)
+
+            # Backward compat for checkpoints that may claim newer version
+            # but still miss global edge counters in stats.
+            if not isinstance(raw_stats, dict) or ("total_success_edges" not in raw_stats or "total_edges" not in raw_stats):
+                self._recompute_edge_counters_from_specific()
             
             print(f"[STDB] Loaded v{version} data from {path}" + 
                   (" (backfilled total_cnt)" if needs_backfill else ""))
