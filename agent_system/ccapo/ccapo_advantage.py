@@ -30,7 +30,7 @@ def compute_ccapo_dual_stream_advantage(
         response_mask: (bs, response_length) - attention mask for response tokens
         index: (bs,) - prompt/uid index for GRPO grouping
         traj_index: (bs,) - trajectory uid
-        a_micro_raw: (bs,) - per-trajectory raw micro advantage from STDB (scalar per trajectory: mean of step-level a_micro_raw)
+        a_micro_raw: (bs,) - per-sample raw micro advantage from STDB (step-aligned in multi-turn rollout)
         beta_micro: float - fusion weight for A_micro
         sigma_min: float - minimum std for A_micro normalization
         norm_adv_by_std: bool - whether to normalize A_macro by std (True=GRPO, False=DrGRPO)
@@ -80,7 +80,9 @@ def compute_ccapo_dual_stream_advantage(
     # Step 2: Compute A_micro (z-score on a_micro_raw)
     # =====================================================
     if not isinstance(a_micro_raw, torch.Tensor):
-        a_micro_raw_t = torch.tensor(a_micro_raw, dtype=torch.float32, device=device)
+        # non_tensor_batch may carry numpy object arrays; force a stable float array first
+        a_micro_raw_np = np.asarray(a_micro_raw, dtype=np.float32)
+        a_micro_raw_t = torch.tensor(a_micro_raw_np, dtype=torch.float32, device=device)
     else:
         a_micro_raw_t = a_micro_raw.to(device=device, dtype=torch.float32)
     

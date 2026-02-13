@@ -1,62 +1,71 @@
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Optional
+
 
 @dataclass
 class STDBConfig:
     enable: bool = True
-    
-    # Layering & Cascading Query
-    lambda_gen: float = 0.8  # 泛化置信度折损
-    
-    # Edge Scoring Factors
-    alpha_dist: float = 0.5  # 距离衰减指数
-    epsilon: float = 1e-6    # 防止除零
-    
-    # v4.1: Bayesian Smoothing
-    bayesian_alpha: float = 1.0  # Beta(alpha, alpha) 先验, 1.0 = 均匀先验
-    
-    # v4.1: Criticality weight
-    lambda_crit: float = 1.0  # C(E) 权重 λ in (1 + λ·C(E))
-    
-    # Cold Start Seeding
+
+    # Layering and cascading query
+    lambda_gen: float = 0.8
+
+    # Edge scoring factors
+    alpha_dist: float = 0.5
+    epsilon: float = 1e-6
+
+    # v4.1 Bayesian smoothing
+    bayesian_alpha: float = 1.0
+
+    # v4.1 criticality weight
+    lambda_crit: float = 1.0
+
+    # Cold start seeding
     seed_path: Optional[str] = None
     stdb_save_path: Optional[str] = None
+
 
 @dataclass
 class LASRConfig:
     enable: bool = True
     beta: float = 1.0
 
+
 @dataclass
 class LoopPenaltyConfig:
     enable: bool = True
-    penalty_value: float = -0.01  # Modified to -0.01 for Trinity Exploration
+    penalty_value: float = -0.01
+
 
 @dataclass
 class InvalidActionPenaltyConfig:
     enable: bool = True
-    penalty_value: float = -0.01  # Modified to -0.01 for Trinity Exploration
+    penalty_value: float = -0.01
+
 
 @dataclass
 class CCAPOConfig:
     """
-    Main Configuration for CCAPO v4.1.
+    Main configuration for CCAPO v4.1.
     """
+
     enable: bool = True
     stdb: STDBConfig = field(default_factory=STDBConfig)
     lasr: LASRConfig = field(default_factory=LASRConfig)
     loop_penalty: LoopPenaltyConfig = field(default_factory=LoopPenaltyConfig)
     invalid_action_penalty: InvalidActionPenaltyConfig = field(default_factory=InvalidActionPenaltyConfig)
-    
+
     # Path settings
     log_dir: str = "local_logger"
     stdb_save_path: Optional[str] = None
-    
-    # v4.1: Dual-Stream Reward Parameters
-    r_terminal: float = 10.0    # 成功终端奖励
-    r_penalty: float = -0.1     # 每步时间惩罚（恒为负值）
-    r_failure: float = -1.0     # 失败固定惩罚（避免自杀倾向）
-    
-    # v4.1: A_micro Normalization
-    beta_micro: float = 0.5     # A_micro 融合权重 β
-    sigma_min: float = 0.1      # A_micro z-score 标准化最小标准差阈值
+
+    # v4.1 dual-stream reward parameters
+    r_terminal: float = 10.0
+    r_penalty: float = -0.05
+    r_failure: float = 0.0
+
+    # v4.1 A_micro normalization
+    beta_micro: float = 0.5
+    sigma_min: float = 0.1
+
+    # Optional exploration bonus for micro rewards (disabled by default for v4.0 behavior)
+    novelty_bonus_coef: float = 0.0

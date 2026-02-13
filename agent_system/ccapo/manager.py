@@ -144,14 +144,17 @@ class CCAPOManager:
             "outcome": outcome,
         }
         
+        # v4.0/v4.1 dual-stream macro reward:
+        #   R_tau = 1(success) * R_terminal + N_step * R_penalty + 1(failure) * R_failure
+        # R_penalty is always applied so that long trajectories are always discouraged.
         if outcome:
             r_terminal = self.config.r_terminal
-            r_penalty_total = n_steps * self.config.r_penalty
-            r_tau = r_terminal + r_penalty_total
+            r_failure = 0.0
         else:
             r_terminal = 0.0
-            r_penalty_total = 0.0
-            r_tau = self.config.r_failure
+            r_failure = self.config.r_failure
+        r_penalty_total = n_steps * self.config.r_penalty
+        r_tau = r_terminal + r_penalty_total + r_failure
         result["r_tau"] = r_tau
 
         # If CCAPO/STDB disabled, return with just R_tau
@@ -210,15 +213,16 @@ class CCAPOManager:
                 if filtered_idx < len(r_micro_filtered):
                     q_value = r_micro_filtered[filtered_idx]
                     
-                    # Novelty Bonus: +0.01 / sqrt(N)
+                    # Optional novelty bonus: coef / sqrt(N)
                     # N comes from total_cnt of the edge we just traversed
                     # edge_details is aligned with filtered_trace transitions (len = trace-1)
                     # filtered_idx starts at 1, so corresponds to edge_details[filtered_idx-1]
                     detail_idx = filtered_idx - 1
                     novelty = 0.0
-                    if 0 <= detail_idx < len(edge_details):
+                    novelty_coef = getattr(self.config, "novelty_bonus_coef", 0.0)
+                    if novelty_coef > 0.0 and 0 <= detail_idx < len(edge_details):
                          N = edge_details[detail_idx].get("N_total", 1.0)
-                         novelty = 0.01 / math.sqrt(N + 1e-6)
+                         novelty = novelty_coef / math.sqrt(N + 1e-6)
                     
                     # Fuse
                     r = q_value + novelty

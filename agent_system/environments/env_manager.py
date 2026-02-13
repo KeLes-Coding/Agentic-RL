@@ -183,6 +183,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             if "r_failure" in c: ccapo_conf.r_failure = float(c.r_failure)
             if "beta_micro" in c: ccapo_conf.beta_micro = float(c.beta_micro)
             if "sigma_min" in c: ccapo_conf.sigma_min = float(c.sigma_min)
+            if "novelty_bonus_coef" in c: ccapo_conf.novelty_bonus_coef = float(c.novelty_bonus_coef)
 
         self.ccapo = CCAPOManager(ccapo_conf)
         super().__init__(envs, projection_f, config)
@@ -305,9 +306,9 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                     trace_valids=self.ccapo_trace_valid[i]
                 )
                 
-                # Inject R_tau into the last step's reward for GRPO
-                # This is the episode-level macro reward with time penalty
-                rewards[i] += episode_result["r_tau"]
+                # Use CCAPO macro reward as the trajectory outcome reward.
+                # Do not add env terminal reward again, otherwise success is double-counted.
+                rewards[i] = episode_result["r_tau"]
                 
                 # Store a_micro_raw list in info for trainer's advantage computation
                 # [CCAPO Fix] Pass full list for step-level granularity, DO NOT AVERAGE

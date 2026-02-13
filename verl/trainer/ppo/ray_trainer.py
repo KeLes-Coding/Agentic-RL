@@ -364,7 +364,8 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         # CCAPO v4.1 Dual-Stream Advantage
         ccapo_beta = kwargs.get('ccapo_beta_micro', 0.5)
         ccapo_sigma_min = kwargs.get('ccapo_sigma_min', 0.1)
-        a_micro_raw = data.non_tensor_batch.get('a_micro_raw', np.zeros(token_level_rewards.shape[0]))
+        batch_size = data.batch['token_level_rewards'].shape[0]
+        a_micro_raw = data.non_tensor_batch.get('a_micro_raw', np.zeros(batch_size, dtype=np.float32))
         advantages, returns = compute_ccapo_dual_stream_advantage(
             token_level_rewards=data.batch['token_level_rewards'],
             response_mask=data.batch['response_mask'],

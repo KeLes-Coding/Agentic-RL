@@ -37,7 +37,7 @@ DATA_SEED=42
 TRAIN_BATCH_SIZE=8
 VAL_BATCH_SIZE=8
 GROUP_SIZE=4
-EXPERIMENT_NAME="ccapo_mode2_reward"
+EXPERIMENT_NAME="ccapo_mode2_v40"
 MAX_STEPS=50
 
 TRAIN_SET_SIZE=200
@@ -58,7 +58,7 @@ echo ">>> [2/2] Starting CCAPO Training - Mode 2: CCAPO Reward..."
 mkdir -p logger
 
 python3 -m verl.trainer.main_ppo \
-    algorithm.adv_estimator=grpo \
+    algorithm.adv_estimator=ccapo \
     reward_model.enable=False \
     reward_model.reward_manager=naive \
     actor_rollout_ref.rollout.load_format=safetensors \
@@ -95,19 +95,23 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
     algorithm.use_kl_in_reward=False \
     algorithm.gamma=1.0 \
+    algorithm.norm_adv_by_std_in_grpo=True \
     ++algorithm.ccapo.enable_ccapo=true \
-    ++algorithm.ccapo.beta_micro=0.1 \
-    ++algorithm.ccapo.r_loop_penalty=-0.1 \
-    ++algorithm.ccapo.enable_update_then_evaluate=true \
+    ++algorithm.ccapo.beta_micro=0.5 \
+    ++algorithm.ccapo.sigma_min=0.1 \
+    ++algorithm.ccapo.r_terminal=10.0 \
+    ++algorithm.ccapo.r_penalty=-0.05 \
+    ++algorithm.ccapo.r_failure=0.0 \
+    ++algorithm.ccapo.novelty_bonus_coef=0.0 \
+    ++algorithm.ccapo.r_loop_penalty=0.0 \
     ++algorithm.ccapo.stdb_save_path="stdb/alfworld_stdb.json" \
+    ++algorithm.ccapo.stdb.seed_path="$(pwd)/stdb_cold_start_output/alfworld_cold_start.json" \
     ++algorithm.ccapo.invalid_action_penalty.enable=true \
-    ++algorithm.ccapo.invalid_action_penalty.penalty_value=-0.1 \
-    ++algorithm.ccapo.stdb.c_explore=2.0 \
-    ++algorithm.ccapo.stdb.alpha_prior=1.0 \
-    ++algorithm.ccapo.stdb.beta_prior=1.0 \
-    ++algorithm.ccapo.stdb.enable_tanh_gating=true \
-    ++algorithm.ccapo.stdb.reward_scale=1.0 \
-    ++algorithm.ccapo.stdb.reward_temp=1.0 \
+    ++algorithm.ccapo.invalid_action_penalty.penalty_value=-0.01 \
+    ++algorithm.ccapo.stdb.lambda_gen=0.8 \
+    ++algorithm.ccapo.stdb.alpha_dist=0.5 \
+    ++algorithm.ccapo.stdb.bayesian_alpha=1.0 \
+    ++algorithm.ccapo.stdb.lambda_crit=1.0 \
     ++algorithm.ccapo.lasr.enable=false \
     env.env_name=alfworld/AlfredTWEnv \
     env.seed=42 \
@@ -123,4 +127,4 @@ python3 -m verl.trainer.main_ppo \
     trainer.total_epochs=1 \
     trainer.val_before_train=False \
     ++algorithm.ccapo.log_dir="logger" \
-    2>&1 | tee logger/ccapo_mode2.log
+    2>&1 | tee logger/ccapo_mode2_v40.log

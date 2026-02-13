@@ -46,7 +46,9 @@ class STDB:
         # Global Counters
         self.stats = {
             "total_success": 0.0,
-            "total_fail": 0.0
+            "total_fail": 0.0,
+            "total_success_edges": 0.0,
+            "total_edges": 0.0,
         }
 
     def seed_from_json(self, json_path: str):
@@ -109,12 +111,14 @@ class STDB:
         for i in range(T - 1):
             u = trace[i]
             v = trace[i+1]
+            self.stats["total_edges"] += 1.0
             
             # v4.1: ALWAYS update total_cnt
             self._update_edge_total(self.layer_specific[specific_key], u, v)
             self._update_edge_total(self.layer_general[task_type], u, v)
             
             if outcome:
+                self.stats["total_success_edges"] += 1.0
                 # Only success: update success_cnt and distance
                 dist_to_goal = T - 1 - (i + 1)
                 self._update_edge_success(self.layer_specific[specific_key], u, v, dist_to_goal)
@@ -229,26 +233,26 @@ class STDB:
 
     def _calculate_score(self, edge: Dict) -> Tuple[float, Dict]:
         """
-        Calculate Q_STDB(E) = Sigmoid( log( I * (1 + λ·C) * D ) )
-        
-        v4.1 Changes:
-        - I(E) = (N_succ + α) / (N_total + 2α)  (conditional success rate + Bayesian smoothing)
-        - C(E) = P(S|E) / P(S_global)            (real conditional, not implicit 1.0)
-        - D(E) = 1 / (d_goal + 1)^α_dist         (restored in formula)
+        Calculate Q_STDB(E) = Sigmoid(log(I * (1 + lambda * C) * D)).
+
+        v4.0-compatible factors:
+        - I(E) = N_succ(E) / N_succ_total
+        - C(E) = P(S|E) / P(S_global)
+        - D(E) = 1 / (d_goal + 1)^alpha_dist
         """
         N_succ_E = edge["success_cnt"]
         N_total_E = edge.get("total_cnt", N_succ_E)  # backward compat
-        alpha = self.config.bayesian_alpha
         eps = self.config.epsilon
         
-        # Importance: Conditional success rate with Bayesian smoothing
-        I_E = (N_succ_E + alpha) / (N_total_E + 2 * alpha)
+        # Importance: edge success frequency among all successful edges.
+        N_succ_total = self.stats.get("total_success_edges", 0.0)
+        I_E = N_succ_E / (N_succ_total + eps)
         
-        # Criticality: P(S|E) / P(S_global)
-        P_S_given_E = N_succ_E / (N_total_E + eps) if N_total_E > 0 else 0.5
-        total_episodes = self.stats["total_success"] + self.stats["total_fail"] + eps
-        P_S_global = (self.stats["total_success"] + eps) / total_episodes
-        C_E = P_S_given_E / P_S_global
+        # Criticality: P(S|E) / P(S_global), both in edge-level frequency.
+        P_S_given_E = N_succ_E / (N_total_E + eps) if N_total_E > 0 else 0.0
+        N_total_global = self.stats.get("total_edges", 0.0)
+        P_S_global = N_succ_total / (N_total_global + eps)
+        C_E = P_S_given_E / (P_S_global + eps)
         
         # Distance
         if edge["dist_samples"] > 0:
