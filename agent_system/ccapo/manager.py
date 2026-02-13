@@ -118,7 +118,6 @@ class CCAPOManager:
         self,
         trace_actions: List[str],
         outcome: bool,
-        outcome: bool,
         context_keys: Dict[str, str] = None,
         trace_valids: List[bool] = None,
         tokens_used: int = 0
