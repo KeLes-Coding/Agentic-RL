@@ -30,12 +30,12 @@ class LASRConfig:
 @dataclass
 class LoopPenaltyConfig:
     enable: bool = True
-    penalty_value: float = -1.0  # Forced to -1.0 per v3.0
+    penalty_value: float = -0.01  # Modified to -0.01 for Trinity Exploration
 
 @dataclass
 class InvalidActionPenaltyConfig:
     enable: bool = True
-    penalty_value: float = -0.5
+    penalty_value: float = -0.01  # Modified to -0.01 for Trinity Exploration
 
 @dataclass
 class CCAPOConfig:

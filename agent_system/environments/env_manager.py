@@ -193,7 +193,9 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
         # initialize the history buffer
         self.memory.reset(batch_size = len(text_obs))
         self.tasks = []
+        self.tasks = []
         self.ccapo_trace = [[] for _ in range(len(text_obs))] # Initialize trace for each env
+        self.ccapo_trace_valid = [[] for _ in range(len(text_obs))] # [CCAPO Trinity] Track validity
         self.reward_history = [[] for _ in range(len(text_obs))] # [CCAPO] Initialize reward history for logging
         self.pre_text_obs = text_obs
         self.extract_task(text_obs)
@@ -278,9 +280,9 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 
             fp_action = self.ccapo.process_step_action(action)
             
-            # Only track valid actions in the trace
-            if valids[i] == 1:
-                self.ccapo_trace[i].append(fp_action)
+            # [CCAPO Trinity] Track ALL actions, valid or not
+            self.ccapo_trace[i].append(fp_action)
+            self.ccapo_trace_valid[i].append(bool(valids[i]))
             
             # Log step for debugging
             self.reward_history[i].append({
@@ -299,7 +301,8 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 episode_result = self.ccapo.process_episode(
                     self.ccapo_trace[i],
                     outcome=won,
-                    context_keys=context_keys
+                    context_keys=context_keys,
+                    trace_valids=self.ccapo_trace_valid[i]
                 )
                 
                 # Inject R_tau into the last step's reward for GRPO
@@ -339,7 +342,9 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                     print(f"[CCAPO] Error writing detailed logs: {e}")
                 
                 # Reset trace and history for next episode
+                # Reset trace and history for next episode
                 self.ccapo_trace[i] = []
+                self.ccapo_trace_valid[i] = []
                 self.reward_history[i] = []
 
         full_text_obs = self.build_text_obs(text_obs, self.envs.get_admissible_commands)

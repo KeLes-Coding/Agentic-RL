@@ -118,7 +118,9 @@ class CCAPOManager:
         self,
         trace_actions: List[str],
         outcome: bool,
+        outcome: bool,
         context_keys: Dict[str, str] = None,
+        trace_valids: List[bool] = None,
         tokens_used: int = 0
     ) -> Dict[str, Any]:
         """
@@ -167,6 +169,13 @@ class CCAPOManager:
         result["loops_removed"] = loops_removed
         
         # 3. STDB Update (v4.1: both success AND failure update total_cnt)
+        # [Trinity] Only update valid steps in STDB?
+        # Decision: Invalid steps shouldn't pollute STDB graph.
+        # But we need to handle them in reward calculation.
+        # Since 'filtered_trace' comes from 'fingerprint_alfworld', likely ok.
+        # However, if action was invalid, 'fingerprint_alfworld' might return raw string.
+        # Let's assume env_manager handles strict filtering for STDB update if needed.
+        # For now, update STDB with filtered trace as is.
         self.stdb.update(filtered_trace, outcome, context=context)
         if outcome and self.config.stdb_save_path:
             self.stdb.save(self.config.stdb_save_path)
@@ -177,32 +186,58 @@ class CCAPOManager:
         )
         result["edge_details"] = edge_details
         
-        # 5. Build per-step R_micro and A_micro_raw aligned to original trace
+        # [CCAPO Trinity] Reward Calculation Loop
+        loop_penalty = self.get_loop_penalty()
+        invalid_penalty = self.get_invalid_action_penalty()
+        
         removed_indices = {item['index'] for item in loops_removed}
         filtered_idx = 1  # r_micro_filtered[0] = start node (0.0)
         
         for i in range(n_steps):
-            if i in removed_indices:
-                # Loop step: R_micro = 0, A_micro_raw = 0
-                result["r_micro"][i] = 0.0
-                result["a_micro_raw"][i] = 0.0
+            is_valid = trace_valids[i] if trace_valids is not None else True
+            
+            # Priority 1: Invalid Action
+            if not is_valid:
+                result["r_micro"][i] = invalid_penalty
+                result["a_micro_raw"][i] = invalid_penalty
+                
+            # Priority 2: Loop Step
+            elif i in removed_indices:
+                result["r_micro"][i] = loop_penalty
+                result["a_micro_raw"][i] = loop_penalty
+                
+            # Priority 3: Valid Novel Step
             else:
                 if filtered_idx < len(r_micro_filtered):
                     q_value = r_micro_filtered[filtered_idx]
-                    result["r_micro"][i] = q_value
+                    
+                    # Novelty Bonus: +0.01 / sqrt(N)
+                    # N comes from total_cnt of the edge we just traversed
+                    # edge_details is aligned with filtered_trace transitions (len = trace-1)
+                    # filtered_idx starts at 1, so corresponds to edge_details[filtered_idx-1]
+                    detail_idx = filtered_idx - 1
+                    novelty = 0.0
+                    if 0 <= detail_idx < len(edge_details):
+                         N = edge_details[detail_idx].get("N_total", 1.0)
+                         novelty = 0.01 / math.sqrt(N + 1e-6)
+                    
+                    # Fuse
+                    r = q_value + novelty
+                    result["r_micro"][i] = r
                     
                     # Compute V̄(S_anchor) for this step
-                    # Anchor = predecessor fingerprint in filtered trace
                     if filtered_idx > 0 and filtered_idx - 1 < len(filtered_trace):
                         anchor_node = filtered_trace[filtered_idx - 1]
                         v_bar = self.stdb.query_anchor_value(anchor_node, context=context)
-                        result["a_micro_raw"][i] = q_value - v_bar
                     else:
-                        result["a_micro_raw"][i] = 0.0
+                        v_bar = 0.0
+                        
+                    result["a_micro_raw"][i] = r - v_bar
                     
                     filtered_idx += 1
                 else:
-                    result["r_micro"][i] = 0.0
+                    # Fallback if indices mismatch
+                    result["r_micro"][i] = 0.0 
                     result["a_micro_raw"][i] = 0.0
         
         # 6. Logging
