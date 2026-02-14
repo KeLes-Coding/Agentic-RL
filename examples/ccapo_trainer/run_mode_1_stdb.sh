@@ -37,8 +37,12 @@ DATA_SEED=42
 TRAIN_BATCH_SIZE=8
 VAL_BATCH_SIZE=8
 GROUP_SIZE=4
-EXPERIMENT_NAME="ccapo_mode0_grpo"
+EXPERIMENT_NAME="ccapo_stage3_stdb"
 MAX_STEPS=50
+LORA_RANK=128
+LORA_ALPHA=256
+ACTOR_LR=2e-6
+PPO_EPOCHS=2
 
 TRAIN_SET_SIZE=200
 VAL_SET_SIZE=$VAL_BATCH_SIZE
@@ -53,12 +57,12 @@ python3 make_real_alfworld_data.py \
 
 DATA_DIR="$(pwd)/data/verl-agent/text"
 
-echo ">>> [2/2] Starting CCAPO Training - Mode 1: STDB Collection Check..."
+echo ">>> [2/2] Starting CCAPO Training - Stage 3: STDB Validation..."
 
 mkdir -p logger
 
 python3 -m verl.trainer.main_ppo \
-    algorithm.adv_estimator=grpo \
+    algorithm.adv_estimator=ccapo \
     reward_model.enable=False \
     reward_model.reward_manager=naive \
     actor_rollout_ref.rollout.load_format=safetensors \
@@ -72,20 +76,26 @@ python3 -m verl.trainer.main_ppo \
     data.truncation='error' \
     data.return_raw_chat=True \
     actor_rollout_ref.model.path=$MODEL_PATH \
-    actor_rollout_ref.model.lora_rank=64 \
-    actor_rollout_ref.model.lora_alpha=128 \
+    actor_rollout_ref.model.lora_rank=$LORA_RANK \
+    actor_rollout_ref.model.lora_alpha=$LORA_ALPHA \
     actor_rollout_ref.model.target_modules=all-linear \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=4 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=8 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2 \
+    actor_rollout_ref.actor.ppo_epochs=$PPO_EPOCHS \
+    actor_rollout_ref.actor.optim.lr=$ACTOR_LR \
+    actor_rollout_ref.actor.optim.lr_warmup_steps=5 \
+    actor_rollout_ref.actor.optim.warmup_style=cosine \
+    actor_rollout_ref.actor.optim.min_lr_ratio=0.1 \
+    actor_rollout_ref.actor.optim.weight_decay=0.0 \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.7 \
     actor_rollout_ref.rollout.n=1 \
     actor_rollout_ref.rollout.dtype=bfloat16 \
     ++actor_rollout_ref.model.override_config.torch_dtype=bfloat16 \
@@ -96,10 +106,21 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     algorithm.gamma=1.0 \
     ++algorithm.ccapo.enable_ccapo=true \
-    ++algorithm.ccapo.beta_micro=0.0 \
-    ++algorithm.ccapo.enable_update_then_evaluate=true \
+    ++algorithm.ccapo.beta_micro=0.15 \
+    ++algorithm.ccapo.sigma_min=0.2 \
+    ++algorithm.ccapo.r_terminal=10.0 \
+    ++algorithm.ccapo.r_penalty=-0.05 \
+    ++algorithm.ccapo.r_failure=0.0 \
+    ++algorithm.ccapo.novelty_bonus_coef=0.0 \
+    ++algorithm.ccapo.r_loop_penalty=0.0 \
     ++algorithm.ccapo.stdb_save_path="stdb/alfworld_stdb.json" \
-    ++algorithm.ccapo.stdb.seed_path="stdb_cold_start_output/alfworld_cold_start.json" \
+    ++algorithm.ccapo.stdb.seed_path="$(pwd)/stdb_cold_start_output/alfworld_cold_start.json" \
+    ++algorithm.ccapo.invalid_action_penalty.enable=true \
+    ++algorithm.ccapo.invalid_action_penalty.penalty_value=-0.01 \
+    ++algorithm.ccapo.stdb.lambda_gen=0.8 \
+    ++algorithm.ccapo.stdb.alpha_dist=0.5 \
+    ++algorithm.ccapo.stdb.bayesian_alpha=1.0 \
+    ++algorithm.ccapo.stdb.lambda_crit=1.0 \
     ++algorithm.ccapo.lasr.enable=false \
     env.env_name=alfworld/AlfredTWEnv \
     env.seed=42 \
@@ -115,4 +136,4 @@ python3 -m verl.trainer.main_ppo \
     trainer.total_epochs=1 \
     trainer.val_before_train=False \
     ++algorithm.ccapo.log_dir="logger" \
-    2>&1 | tee logger/ccapo_mode1.log
+    2>&1 | tee logger/ccapo_stage3_stdb.log
