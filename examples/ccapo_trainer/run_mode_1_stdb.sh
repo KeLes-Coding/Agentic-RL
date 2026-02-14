@@ -39,10 +39,10 @@ VAL_BATCH_SIZE=8
 GROUP_SIZE=4
 EXPERIMENT_NAME="ccapo_stage3_stdb"
 MAX_STEPS=50
-LORA_RANK=128
-LORA_ALPHA=256
+LORA_RANK=64
+LORA_ALPHA=128
 ACTOR_LR=2e-6
-PPO_EPOCHS=2
+PPO_EPOCHS=1
 
 TRAIN_SET_SIZE=200
 VAL_SET_SIZE=$VAL_BATCH_SIZE
@@ -81,7 +81,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.target_modules=all-linear \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=8 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=4 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.actor.ppo_epochs=$PPO_EPOCHS \
     actor_rollout_ref.actor.optim.lr=$ACTOR_LR \
@@ -95,7 +95,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.7 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.65 \
     actor_rollout_ref.rollout.n=1 \
     actor_rollout_ref.rollout.dtype=bfloat16 \
     ++actor_rollout_ref.model.override_config.torch_dtype=bfloat16 \
