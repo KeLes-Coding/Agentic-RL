@@ -142,6 +142,7 @@ local_logger*/
 stdb_0*/
 config.yaml
 training_metrics/
+training_metrics*/
 stdb_cold_start_output/
 .sync_logs.bat
 .sync_logs.sh

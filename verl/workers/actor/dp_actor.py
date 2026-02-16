@@ -39,6 +39,7 @@ from verl.utils.torch_functional import logprobs_from_logits
 from verl.utils.ulysses import gather_outpus_and_unpad, ulysses_pad_and_slice_inputs, ulysses_pad
 from verl.workers.actor import BasePPOActor
 from agent_system.ccapo.manager import CCAPOManager
+from agent_system.ccapo.config import CCAPOConfig
 
 if is_cuda_available:
     from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
@@ -74,7 +75,9 @@ class DataParallelPPOActor(BasePPOActor):
         )
         self.device_name = get_device_name()
         
-        self.ccapo = CCAPOManager()
+        # LASR is no longer part of the CCAPO v4.0+ doc. Keep the codepath but disable it by default
+        # to avoid silently reweighting policy gradients in the actor worker process.
+        self.ccapo = CCAPOManager(CCAPOConfig(enable=False))
 
     def _forward_micro_batch(self, micro_batch, temperature, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
