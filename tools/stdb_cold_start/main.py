@@ -101,7 +101,7 @@ def main():
                        help="每个任务最大重试次数 (default: 1)")
     
     # 并发配置
-    parser.add_argument("--workers", type=int, default=1,
+    parser.add_argument("--workers", type=int, default=12,
                        help="并发worker数量 (default: 1)")
     
     # 输出配置
